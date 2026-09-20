@@ -38,6 +38,18 @@
 - Upgrade Strategy
 - Contract Interfaces
 - Events
+- Documentation
+
+## Documentation
+
+| Document | Description |
+| --- | --- |
+| [UPGRADEABILITY.md](UPGRADEABILITY.md) | Contract upgrade model and migration strategy |
+| [SECURITY_BATCH.md](SECURITY_BATCH.md) | Security audit findings and remediation status |
+| [GAS_OPTIMIZATION.md](GAS_OPTIMIZATION.md) | Gas optimization patterns and benchmarks |
+| [testing/README.md](testing/README.md) | Testing harness setup and conventions |
+| [shared/README.md](shared/README.md) | Shared library utilities and helpers |
+| [security/README.md](security/README.md) | Security model and access control overview |
 - Storage Layout
 - Contribution Guide
 - Brand

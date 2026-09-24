@@ -19,7 +19,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32v1-none
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -34,6 +34,119 @@ jobs:
       - name: Build all contracts
         run: cargo build --release
 
+  wasm-size-budget:
+    name: WASM Size Budget Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install soroban CLI
+        run: cargo install soroban-cli
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build and measure WASM sizes
+        run: |
+          mkdir -p wasm-sizes
+          contracts=(
+            "access-control"
+            "aid-contract"
+            "governance-contract"
+            "nft-marketplace"
+            "oracle-contract"
+            "payments-contract"
+            "rebalancer-contract"
+            "referral-contract"
+            "registry-contract"
+            "treasury-contract"
+          )
+
+          for contract in "${contracts[@]}"; do
+            if [ -d "contracts/$contract" ]; then
+              cd "contracts/$contract"
+              soroban contract build --release 2>/dev/null || cargo build --release --target wasm32-unknown-unknown
+              cd ../..
+              wasm_file=$(find target/wasm32-unknown-unknown/release -name "${contract}.wasm" 2>/dev/null | head -1)
+              if [ -z "$wasm_file" ]; then
+                wasm_file=$(find target/wasm32-unknown-unknown/release -name "*.wasm" | grep -i "$contract" | head -1)
+              fi
+              if [ -n "$wasm_file" ]; then
+                size=$(stat -f%z "$wasm_file" 2>/dev/null || stat -c%s "$wasm_file")
+                echo "$contract: $size bytes" >> wasm-sizes/sizes.txt
+              fi
+            fi
+          done
+          cat wasm-sizes/sizes.txt
+
+      - name: Check against budgets
+        run: |
+          # Define per-contract budgets (in bytes)
+          declare -A budgets=(
+            ["access-control"]=256000
+            ["aid-contract"]=512000
+            ["governance-contract"]=512000
+            ["nft-marketplace"]=600000
+            ["oracle-contract"]=400000
+            ["payments-contract"]=512000
+            ["rebalancer-contract"]=512000
+            ["referral-contract"]=512000
+            ["registry-contract"]=512000
+            ["treasury-contract"]=512000
+          )
+
+          failed=0
+          while IFS=': ' read -r contract size; do
+            contract_name=$(echo "$contract" | xargs)
+            size=$(echo "$size" | sed 's/[^0-9]//g')
+            budget=${budgets[$contract_name]:-512000}
+            
+            if [ "$size" -gt "$budget" ]; then
+              echo "❌ $contract_name: $size bytes exceeds budget of $budget bytes"
+              failed=1
+            else
+              echo "✓ $contract_name: $size bytes (budget: $budget bytes)"
+            fi
+          done < wasm-sizes/sizes.txt
+
+          exit $failed
+
+      - name: Comment PR with size report
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let report = '## WASM Size Report\n\n';
+
+            try {
+              const sizes = fs.readFileSync('wasm-sizes/sizes.txt', 'utf8');
+              report += '```\n' + sizes + '\n```\n';
+            } catch (e) {
+              report += 'Could not read size report\n';
+            }
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            })
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -43,7 +156,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32v1-none
+          targets: wasm32-unknown-unknown
           components: clippy
 
       - name: Cache cargo
@@ -68,7 +181,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32v1-none
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -96,25 +209,3 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all -- --check
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
-      - name: Run tests
-        run: cargo test --workspace

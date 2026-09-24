@@ -1,4 +1,44 @@
 #![no_std]
+//! # Treasury Contract
+//!
+//! Protocol treasury management for Trellis humanitarian aid platform.
+//!
+//! ## Overview
+//!
+//! The Treasury Contract is the financial heart of Trellis, managing:
+//! - **Per-category balances** (e.g., `reserve`, `rewards`) for fund segregation
+//! - **Withdrawal limits** to prevent accidental large transfers
+//! - **Role-based access control** via treasury managers and administrators
+//! - **Referral reward distribution** through integration with the referral contract
+//!
+//! ## Categories
+//!
+//! The treasury organizes funds into categories, each with its own balance:
+//! - **`reserve`**: Protocol emergency funds
+//! - **`rewards`**: Referral commission pool
+//! - Custom categories as defined by administrators
+//!
+//! ## Roles
+//!
+//! - **Admin**: Full governance (set managers, configure limits, emergency withdraw)
+//! - **Treasury Manager**: Operational access (deposit, withdraw, distribute rewards)
+//!
+//! ## Example Flow
+//!
+//! 1. Admin calls [`TreasuryContract::initialize`] to set up the contract
+//! 2. Admin calls [`TreasuryContract::add_treasury_manager`] to grant permissions
+//! 3. Managers call [`TreasuryContract::deposit`] to fund categories
+//! 4. Managers call [`TreasuryContract::withdraw`] for routine payouts
+//! 5. Referral contract calls [`TreasuryContract::distribute_reward`] to pay commissions
+//! 6. Admin can call [`TreasuryContract::emergency_withdraw`] if contract is paused
+//!
+//! ## Queries
+//!
+//! - [`TreasuryContract::category_balance`]: Check a category's current balance
+//! - [`TreasuryContract::withdrawal_limit`]: View the max per-transaction limit
+//! - [`TreasuryContract::referral_contract`]: See the registered referral contract
+//!
+//! For full API details, see the module items below.
 
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Symbol};
 

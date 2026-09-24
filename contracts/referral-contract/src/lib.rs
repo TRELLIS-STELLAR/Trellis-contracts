@@ -1,4 +1,43 @@
 #![no_std]
+//! # Referral Contract
+//!
+//! Multi-tier referral network and affiliate commission distribution for Trellis.
+//!
+//! ## Overview
+//!
+//! The Referral Contract manages:
+//! - **Referral graphs**: Wallets can register under a referrer to join the network
+//! - **Multi-tier commissions**: Base amounts accrue commissions at each referral tier
+//! - **Lifetime caps**: Each referrer has a maximum cumulative commission
+//! - **Treasury integration**: Accrued commissions are claimed from the protocol treasury
+//!
+//! ## Tier System
+//!
+//! A transaction can trigger commissions across multiple tiers:
+//! - **Tier 1**: Direct referrer gets Tier 1 BPS % of the base amount
+//! - **Tier 2**: Referrer's referrer gets Tier 2 BPS % of the base amount
+//! - Up to configured `max_tiers` (1-10 levels deep)
+//!
+//! Example: if Tier 1 BPS = 500 (5%) and a referral accrues 1000 tokens base:
+//! - Tier 1 referrer gets 50 tokens
+//! - Tier 2 referrer gets `1000 × (tier2_bps / 10000)` tokens
+//!
+//! ## Example Flow
+//!
+//! 1. Admin calls [`ReferralContract::initialize`]
+//! 2. Admin calls [`ReferralContract::set_tier_config`] with BPS percentages and cap
+//! 3. Wallet A calls [`ReferralContract::register`] under Wallet B
+//! 4. Admin calls [`ReferralContract::accrue`] when transaction occurs
+//! 5. Wallets call [`ReferralContract::claim_rewards`] to collect treasury payouts
+//!
+//! ## Queries
+//!
+//! - [`ReferralContract::accrued_balance`]: Claimable commission for a referrer
+//! - [`ReferralContract::lifetime_accrued`]: Total lifetime commissions (for cap)
+//! - [`ReferralContract::get_referrer`]: Direct referrer for a wallet
+//! - [`ReferralContract::get_tier_config`]: Current tier configuration
+//!
+//! For full API details, see the module items below.
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, vec, Address, Env, IntoVal, Symbol,

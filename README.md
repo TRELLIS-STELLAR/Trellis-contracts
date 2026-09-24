@@ -19,6 +19,10 @@
   <img src="https://img.shields.io/badge/status-active%20development-E39A3C?style=flat-square" alt="Status">
 </p>
 
+<p align="center">
+  <a href="https://trellis-stellar.github.io/Trellis-contracts/" style="text-decoration: none; color: #1C6B55; font-weight: 500;">📖 API Documentation</a>
+</p>
+
 ---
 
 # Table of Contents
@@ -29,7 +33,7 @@
 - Architecture
 - Contract Modules
 - Technology Stack
-- Project Structure
+- Deployments
 - Development Setup
 - Build
 - Testing
@@ -294,7 +298,46 @@ Security audit tooling and CI gating for static analysis and vulnerability scann
 
 ---
 
-# Project Structure
+# Deployments
+
+For deployed contract addresses, networks, and versions, see [DEPLOYMENTS.md](./DEPLOYMENTS.md).
+
+### Quick Reference
+
+| Network     | Status           | Details                                          |
+| ----------- | ---------------- | ------------------------------------------------ |
+| **Testnet** | Not yet deployed | See [DEPLOYMENTS.md](./DEPLOYMENTS.md) for setup |
+| **Mainnet** | Not yet deployed | Awaiting security review and governance          |
+
+### Deploying Contracts
+
+To deploy all contracts to testnet:
+
+```bash
+./scripts/deploy.sh testnet
+./scripts/record-deployments.sh testnet
+```
+
+Then verify:
+
+```bash
+./scripts/verify.sh testnet
+```
+
+For mainnet deployments, see [UPGRADEABILITY.md](./UPGRADEABILITY.md) for the full upgrade governance process.
+
+### Upgrade History
+
+All upgrades are tracked in the on-chain upgradeability registry. To view upgrade history for a contract:
+
+```bash
+soroban contract invoke \
+  --id <UPGRADEABILITY_CONTRACT_ID> \
+  -- get_upgrade_history \
+  --contract-id <CONTRACT_ID>
+```
+
+---# Project Structure
 
 ```
 

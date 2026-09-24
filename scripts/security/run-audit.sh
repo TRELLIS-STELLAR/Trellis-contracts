@@ -111,12 +111,18 @@ import json, sys
 try:
     data = json.load(open(sys.argv[1], encoding="utf-8"))
 except Exception:
+    # A scan that produced no parseable output must not read as "clean".
+    print("AUDIT-ERROR\tHIGH\tcargo-audit\tno parseable output (see cargo audit stderr)")
     sys.exit(0)
 vulns = data.get("vulnerabilities", {}).get("list", []) or []
 for v in vulns:
     adv = v.get("advisory", {})
-    print(f"{adv.get('id','?')}\t{adv.get('severity','?').upper()}\t{v.get('package',{}).get('name','?')}\t{adv.get('title','')}")
+    # RustSec advisories carry no severity field (only an optional CVSS
+    # vector), so every vulnerability is treated as HIGH and gates.
+    print(f"{adv.get('id','?')}\tHIGH\t{v.get('package',{}).get('name','?')}\t{adv.get('title','')}")
 warnings = data.get("warnings", []) or []
+if isinstance(warnings, dict):  # cargo-audit >= 0.17: {kind: [warning, ...]}
+    warnings = [w for ws in warnings.values() for w in ws]
 for w in warnings:
     print(f"{w.get('package',{}).get('name','?')}\tMEDIUM\t{w.get('package',{}).get('name','?')}\t{w.get('kind','warning')}: unmaintained/duplicate dependency")
 PY
@@ -133,6 +139,7 @@ PY
       MEDIUMS+=("$line")
     fi
   done < "$WORKDIR/audit.findings"
+  grep -q '^AUDIT-ERROR' "$WORKDIR/audit.findings" && cat "$WORKDIR/audit.err" >&2
   [[ -s "$WORKDIR/audit.findings" ]] || { echo "No known advisories."; append_report "No known advisories."; }
 fi
 
@@ -142,7 +149,7 @@ CLIPPY_JSON="$WORKDIR/clippy.json"
 RUST_MIN_STACK=33554432 cargo clippy --workspace --lib --message-format=json -- "${CLIPPY_PRESET[@]}" > "$CLIPPY_JSON" 2> "$WORKDIR/clippy.human.log"
 grep -E "^warning" "$WORKDIR/clippy.human.log" | sort | uniq -c | sed 's/^/  /' || true
 append_report '```'
-grep -E "^warning|-->" "$WORKDIR/clippy.human.log" >> "$REPORT.tmp" 2>/dev/null || true
+[[ -n "$REPORT" ]] && grep -E "^warning|-->" "$WORKDIR/clippy.human.log" >> "$REPORT.tmp" 2>/dev/null || true
 [[ -n "$REPORT" ]] && printf '```\n' >> "$REPORT.tmp"
 
 "$PY" - "$CLIPPY_JSON" <<'PY' > "$WORKDIR/clippy.findings"

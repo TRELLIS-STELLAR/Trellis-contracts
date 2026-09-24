@@ -1,4 +1,38 @@
 #![no_std]
+//! # Aid Contract
+//!
+//! Direct aid settlement and escrow on the Stellar blockchain.
+//!
+//! ## Overview
+//!
+//! The Aid Contract manages the core humanitarian aid disbursement flow:
+//! - Donors create aid records, escrowing funds in the contract
+//! - Recipients claim aid within expiration windows
+//! - Donors can refund expired, unclaimed aid
+//! - Administrative pause/resume for emergency controls
+//!
+//! ## Key Concepts
+//!
+//! - **Aid Record**: An immutable entry containing donor, recipient, amount, and expiration
+//! - **Status**: Each aid transitions through `Pending` → `Settled`/`Refunded`
+//! - **Expiry**: Aids expire at a ledger sequence number; claims are rejected once expired
+//! - **Authorization**: Donors create aid, recipients claim, admins pause/resume
+//!
+//! ## Example Flow
+//!
+//! 1. Donor calls [`AidContract::create_aid`] with recipient address and amount
+//! 2. Contract escrows funds and returns an aid ID
+//! 3. Recipient calls [`AidContract::claim_aid`] before expiry ledger
+//! 4. Funds transfer to recipient, status becomes `Settled`
+//! 5. If unclaimed past expiry, donor can call [`AidContract::refund_aid`]
+//!
+//! ## Queries
+//!
+//! - [`AidContract::get_aid`]: Fetch a single aid record
+//! - [`AidContract::get_admin`]: Current admin address
+//! - [`AidContract::is_initialized`]: Check initialization state
+//!
+//! For full API details, see the module items below.
 
 use shared::events::{
     emit_action_executed, emit_aid_created, emit_module_initialized, emit_permission_changed,

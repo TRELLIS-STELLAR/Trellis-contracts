@@ -1,4 +1,32 @@
 #![no_std]
+//! # Oracle Contract
+//!
+//! Off-chain data integration and verification bridge for Trellis.
+//!
+//! ## Overview
+//!
+//! The Oracle Contract acts as a bridge between off-chain verification systems and on-chain state.
+//! It stores references to:
+//! - **AI verification proofs**: Hash references to external verification
+//! - **Metadata pointers**: URLs or identifiers for off-chain data
+//! - **Signatures**: External signatures proving authenticity
+//!
+//! This contract does not execute the verification logic itself, but rather anchors
+//! cryptographic proof that verification occurred.
+//!
+//! ## Example Flow
+//!
+//! 1. Off-chain system verifies user identity via AI or document review
+//! 2. System generates a proof hash and calls the oracle contract
+//! 3. On-chain applications query the oracle to confirm verification
+//! 4. Applications can trust that a specific wallet has been verified
+//!
+//! ## Queries
+//!
+//! - Retrieve verification metadata for a wallet
+//! - Check proof hashes and signatures
+//!
+//! For full API details, see the module items below.
 
 mod errors;
 mod events;

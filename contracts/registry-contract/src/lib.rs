@@ -1,4 +1,30 @@
 #![no_std]
+//! # Registry Contract
+//!
+//! Central contract discovery and version tracking for Trellis.
+//!
+//! ## Overview
+//!
+//! The Registry Contract maintains a global directory of Trellis contracts, enabling:
+//! - **Contract discovery**: Look up live contract addresses by name
+//! - **Version history**: Track all versions of each contract
+//! - **Upgrade tracking**: See when a contract was replaced
+//! - **Cross-contract communication**: Contracts query the registry to find peers
+//!
+//! ## Example Flow
+//!
+//! 1. Admin calls [`RegistryContract::set_contract`] with contract name and address
+//! 2. Applications query [`RegistryContract::get_contract`] to discover endpoints
+//! 3. When a contract is upgraded, admin calls `set_contract` again
+//! 4. Registry stores both versions; `get_version_history` shows the timeline
+//!
+//! ## Queries
+//!
+//! - [`RegistryContract::get_contract`]: Get the current address for a named contract
+//! - [`RegistryContract::get_version_history`]: View all historical versions
+//! - [`RegistryContract::get_all_contracts`]: List all registered contracts
+//!
+//! For full API details, see the module items below.
 
 use shared::events::{emit_action_executed, emit_module_initialized};
 use shared::{auth, errors::Error};

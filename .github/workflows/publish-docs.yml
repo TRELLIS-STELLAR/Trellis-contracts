@@ -1,0 +1,283 @@
+name: Publish Documentation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build-docs:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build documentation
+        run: cargo doc --workspace --no-deps --release
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+      - name: Create landing page
+        run: |
+          cat > target/doc/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Trellis Smart Contracts - API Documentation</title>
+              <style>
+                  * {
+                      margin: 0;
+                      padding: 0;
+                      box-sizing: border-box;
+                  }
+                  body {
+                      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                      line-height: 1.6;
+                      color: #333;
+                      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+                      min-height: 100vh;
+                      padding: 2rem;
+                  }
+                  .container {
+                      max-width: 900px;
+                      margin: 0 auto;
+                      background: white;
+                      border-radius: 12px;
+                      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+                      padding: 3rem;
+                  }
+                  h1 {
+                      color: #1C6B55;
+                      margin-bottom: 0.5rem;
+                      font-size: 2.5rem;
+                  }
+                  .subtitle {
+                      color: #666;
+                      font-size: 1.1rem;
+                      margin-bottom: 2rem;
+                      border-bottom: 2px solid #1C6B55;
+                      padding-bottom: 1rem;
+                  }
+                  .section {
+                      margin: 2rem 0;
+                  }
+                  .section-title {
+                      font-size: 1.5rem;
+                      color: #1C6B55;
+                      margin-bottom: 1rem;
+                      margin-top: 1.5rem;
+                  }
+                  .crate-grid {
+                      display: grid;
+                      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                      gap: 1.5rem;
+                      margin: 1.5rem 0;
+                  }
+                  .crate-card {
+                      border: 1px solid #e0e0e0;
+                      border-radius: 8px;
+                      padding: 1.5rem;
+                      transition: all 0.3s ease;
+                      background: #f9f9f9;
+                  }
+                  .crate-card:hover {
+                      border-color: #1C6B55;
+                      box-shadow: 0 4px 12px rgba(28, 107, 85, 0.1);
+                      transform: translateY(-2px);
+                  }
+                  .crate-card h3 {
+                      color: #1C6B55;
+                      margin-bottom: 0.5rem;
+                      font-size: 1.1rem;
+                  }
+                  .crate-card p {
+                      font-size: 0.9rem;
+                      color: #666;
+                      margin-bottom: 1rem;
+                  }
+                  .crate-card a {
+                      color: #1C6B55;
+                      text-decoration: none;
+                      font-weight: 500;
+                      display: inline-block;
+                      transition: color 0.3s ease;
+                  }
+                  .crate-card a:hover {
+                      color: #0d4a38;
+                      text-decoration: underline;
+                  }
+                  .category {
+                      background: #f0f5f3;
+                      border-left: 4px solid #1C6B55;
+                      padding: 1rem;
+                      margin-bottom: 1rem;
+                      border-radius: 4px;
+                  }
+                  .category h4 {
+                      color: #1C6B55;
+                      margin-bottom: 0.5rem;
+                  }
+                  .links-section {
+                      background: #f9f9f9;
+                      padding: 1.5rem;
+                      border-radius: 8px;
+                      margin-top: 2rem;
+                  }
+                  .links-section a {
+                      color: #1C6B55;
+                      text-decoration: none;
+                      margin-right: 1.5rem;
+                      font-weight: 500;
+                      display: inline-block;
+                      margin-bottom: 0.5rem;
+                  }
+                  .links-section a:hover {
+                      text-decoration: underline;
+                  }
+                  footer {
+                      margin-top: 3rem;
+                      padding-top: 2rem;
+                      border-top: 1px solid #e0e0e0;
+                      text-align: center;
+                      color: #999;
+                      font-size: 0.9rem;
+                  }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <h1>🌳 Trellis Smart Contracts</h1>
+                  <div class="subtitle">API Documentation for Soroban Contracts</div>
+
+                  <div class="section">
+                      <p>Welcome to the Trellis Contracts documentation. This site provides comprehensive API references for all crates in the Trellis smart contract workspace.</p>
+                      <p style="margin-top: 1rem; color: #666;">Trellis executes humanitarian aid transactions on the Stellar blockchain using Soroban. These contracts form the trust layer of the platform, enabling transparent, auditable, and programmable aid distribution.</p>
+                  </div>
+
+                  <div class="section">
+                      <h2 class="section-title">Core Contracts</h2>
+                      <div class="crate-grid">
+                          <div class="crate-card">
+                              <h3>aid-contract</h3>
+                              <p>Direct aid settlement, escrow, and claim management. Recipients claim funds within expiry windows; expired aids are refundable to donors.</p>
+                              <a href="aid_contract/index.html">View Documentation →</a>
+                          </div>
+                          <div class="crate-card">
+                              <h3>treasury-contract</h3>
+                              <p>Protocol treasury management. Manages per-category balances, enforces withdrawal limits, and distributes referral rewards.</p>
+                              <a href="treasury_contract/index.html">View Documentation →</a>
+                          </div>
+                          <div class="crate-card">
+                              <h3>referral-contract</h3>
+                              <p>Multi-tier referral graph and commission accrual. Tracks referrer chains and distributes tiered commissions.</p>
+                              <a href="referral_contract/index.html">View Documentation →</a>
+                          </div>
+                          <div class="crate-card">
+                              <h3>governance-contract</h3>
+                              <p>Multi-signature governance for role management, proposals, and protocol parameter tuning.</p>
+                              <a href="governance_contract/index.html">View Documentation →</a>
+                          </div>
+                          <div class="crate-card">
+                              <h3>oracle-contract</h3>
+                              <p>AI verification references and external data integration. Bridges off-chain verification to on-chain state.</p>
+                              <a href="oracle_contract/index.html">View Documentation →</a>
+                          </div>
+                          <div class="crate-card">
+                              <h3>registry-contract</h3>
+                              <p>Contract discovery and version tracking. Central registry for contract addresses and implementation versions.</p>
+                              <a href="registry_contract/index.html">View Documentation →</a>
+                          </div>
+                      </div>
+                  </div>
+
+                  <div class="section">
+                      <h2 class="section-title">Supporting Contracts</h2>
+                      <div class="crate-grid">
+                          <div class="crate-card">
+                              <h3>payments-contract</h3>
+                              <p>Token transfer and payment settlement layer.</p>
+                              <a href="payments_contract/index.html">View Documentation →</a>
+                          </div>
+                          <div class="crate-card">
+                              <h3>rebalancer-contract</h3>
+                              <p>Liquidity rebalancing and reserve management.</p>
+                              <a href="rebalancer_contract/index.html">View Documentation →</a>
+                          </div>
+                          <div class="crate-card">
+                              <h3>nft-marketplace</h3>
+                              <p>NFT minting, trading, and marketplace functionality.</p>
+                              <a href="nft_marketplace/index.html">View Documentation →</a>
+                          </div>
+                          <div class="crate-card">
+                              <h3>access-control</h3>
+                              <p>Role-based access control primitives and authorization patterns.</p>
+                              <a href="access_control/index.html">View Documentation →</a>
+                          </div>
+                      </div>
+                  </div>
+
+                  <div class="section">
+                      <h2 class="section-title">Shared Libraries</h2>
+                      <div class="category">
+                          <h4>shared</h4>
+                          <p>Shared types, utilities, and patterns reused across all contracts. Includes error codes, event schemas, and storage helpers.</p>
+                          <a href="shared/index.html">View Documentation →</a>
+                      </div>
+                  </div>
+
+                  <div class="links-section">
+                      <h3 style="color: #1C6B55; margin-bottom: 1rem;">Quick Links</h3>
+                      <a href="https://github.com/TRELLIS-STELLAR/Trellis-contracts" target="_blank">📦 Repository</a>
+                      <a href="https://github.com/TRELLIS-STELLAR/Trellis-contracts/issues" target="_blank">🐛 Issues</a>
+                      <a href="https://github.com/TRELLIS-STELLAR/Trellis-contracts/blob/main/GAS_OPTIMIZATION.md" target="_blank">⚡ Gas Optimization Guide</a>
+                  </div>
+
+                  <footer>
+                      <p>Trellis Contracts documentation is automatically generated from source code.</p>
+                      <p style="margin-top: 0.5rem;">Built with <a href="https://doc.rust-lang.org/rustdoc/" style="color: #1C6B55; text-decoration: none;">rustdoc</a> • Licensed under MIT</p>
+                  </footer>
+              </div>
+          </body>
+          </html>
+          EOF
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build-docs
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -213,6 +213,62 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  # Code coverage: cargo llvm-cov (better no_std support for Soroban than tarpaulin).
+  # Reports JSON coverage metrics for all workspace crates.
+  # Fails CI if coverage drops below agreed floor.
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    needs: test
+    env:
+      COVERAGE_FLOOR: 70
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Run coverage
+        run: cargo llvm-cov --all-crates --output-format json --output json-coverage.json
+
+      - name: Check coverage floor
+        run: |
+          COVERAGE=$(jq '.coverage[0].percent_covered' json-coverage.json)
+          FLOOR=${{ env.COVERAGE_FLOOR }}
+          echo "Coverage: ${COVERAGE}% | Floor: ${FLOOR}%"
+          if (( $(echo "$COVERAGE >= $FLOOR" | bc -l) )); then
+            echo "✓ Coverage meets floor"
+            exit 0
+          else
+            echo "✗ Coverage below floor (need to add tests)"
+            exit 1
+          fi
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: json-coverage.json
+          if-no-files-found: ignore
+
   # Security audit: cargo audit + clippy security preset (see security/README.md).
   # BLOCKING: any high-severity finding (every RustSec vulnerability, panic-family
   # lints) without a valid entry in security/audit-allowlist.toml fails the job.

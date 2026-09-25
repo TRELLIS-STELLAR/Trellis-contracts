@@ -13,7 +13,7 @@ use fee_calculator::calculate_total_fees;
 use shared::events::emit_action_executed;
 use slippage_predictor::predict_slippage;
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Env, Symbol, Vec, U256};
-use strategy_executor::execute_strategy;
+use strategy_executor::{execute_strategy, ExecutionSummary, TradeError, TradeStatus, TradeErrorKind};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -49,18 +49,22 @@ impl MultiAssetRebalancer {
         dry_run: bool,
     ) -> SimulationResult {
         let total_fees = calculate_total_fees(&trades);
-        // U256 has no env-independent Add impl, so accumulate the count of
-        // slippage units (the predictor currently returns a constant) and
-        // materialise the total once.
-        let mut slippage_units: u128 = 0;
+        
+        // Accumulate slippage from each trade
+        // U256 cannot be used directly with addition in no_std, so we accumulate as i128
+        // then convert to U256 at the end
+        let mut total_slippage_bps: i128 = 0;
         for trade in trades.iter() {
-            let _ = predict_slippage(trade.asset_pair.clone(), trade.amount, &env);
-            slippage_units = slippage_units.saturating_add(1);
+            let slippage = predict_slippage(trade.asset_pair.clone(), trade.amount, &env);
+            let slippage_bps = slippage.to_i128(&env);
+            // Safe saturating add to prevent overflow
+            total_slippage_bps = total_slippage_bps.saturating_add(slippage_bps);
         }
-        let total_slippage = U256::from_u128(&env, slippage_units);
+        let total_slippage = U256::from_i128(&env, total_slippage_bps);
 
         if !dry_run {
-            execute_strategy(&env, &strategy, &trades);
+            let _execution_result = execute_strategy(&env, &strategy, &trades);
+            // TODO: In Phase 3.2+, capture execution details from result
         }
 
         let result = SimulationResult {

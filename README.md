@@ -16,6 +16,7 @@
   <img src="https://img.shields.io/badge/Rust-1.80%2B-14201C?style=flat-square" alt="Rust">
   <img src="https://img.shields.io/badge/Soroban-latest-1C6B55?style=flat-square" alt="Soroban">
   <img src="https://img.shields.io/badge/Stellar-blockchain-14201C?style=flat-square" alt="Stellar">
+  <img src="https://img.shields.io/badge/coverage-TBD-1C6B55?style=flat-square" alt="Coverage">
   <img src="https://img.shields.io/badge/status-active%20development-E39A3C?style=flat-square" alt="Status">
 </p>
 

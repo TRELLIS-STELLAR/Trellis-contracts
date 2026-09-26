@@ -11,6 +11,7 @@ pub mod payments;
 pub mod quota;
 pub mod storage;
 pub mod utils;
+pub mod webhook;
 
 // Re-export the most commonly-needed items at crate root for ergonomic use.
 pub use auth::{get_admin, require_admin, require_not_paused, set_admin};
@@ -57,6 +58,11 @@ pub use storage::{
 };
 pub use utils::{is_expired, now};
 
+pub use webhook::{
+    check_timestamp, is_processed, mark_processed, sign_webhook, verify_and_consume,
+    verify_signature, webhook_message, WebhookConfig, WebhookEvent, WebhookKey,
+    MAX_PAYLOAD_BYTES,
+};
 #[cfg(test)]
 mod test_auth;
 #[cfg(test)]

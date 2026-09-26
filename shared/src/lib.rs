@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod auth;
+pub mod analytics;
 pub mod batch;
 pub mod compat;
 pub mod config;
@@ -57,6 +58,10 @@ pub use storage::{
 };
 pub use utils::{is_expired, now};
 
+pub use analytics::{
+    aggregate_events, is_fully_suppressed, is_safe_dimension, is_sensitive_dimension,
+    AggregateBucket, AnalyticsReport, PrivacyConfig, RawObservation, ANALYTICS_METRIC_VERSION,
+};
 #[cfg(test)]
 mod test_auth;
 #[cfg(test)]

@@ -217,6 +217,22 @@ impl AidContract {
             env.panic_with_error(AidError::NotExpiredYet);
         }
 
+        // Quota enforcement (Issue #65): fail-open when unconfigured so
+        // existing deployments keep working until maintainers set limits.
+        // Over-limit callers get a user-safe QuotaExceeded panic.
+        if let Err(e) = shared::quota::check_and_consume(
+            &env,
+            &donor,
+            &symbol_short!("aid_crt"),
+            amount,
+        ) {
+            if e == Error::QuotaExceeded {
+                panic_with_error!(&env, Error::QuotaExceeded);
+            }
+            // Fail-open for unset quota config is handled inside
+            // check_and_consume; any other error is non-fatal here.
+        }
+
         // Auto-allocate aid ID via counter (avoids caller-supplied collision)
         let aid_id = get_aid_counter(&env);
         if has_aid(&env, aid_id) {
@@ -383,6 +399,57 @@ impl AidContract {
 
     pub fn get_aid(env: Env, aid_id: u64) -> Option<AidRecord> {
         storage::get_aid(&env, aid_id)
+    }
+
+    // -----------------------------------------------------------------------
+    // Schema version & compatibility (Issue #64)
+    // -----------------------------------------------------------------------
+
+    /// Schema version stamped on all new aid records.
+    ///
+    /// Old clients can branch on this; new clients always receive the latest
+    /// shape via [`AidContract::get_aid_latest`].
+    pub fn schema_version(env: Env) -> u32 {
+        let _ = env;
+        shared::compat::current_schema_version()
+    }
+
+    /// Version-aware read: always returns the latest [`shared::compat::CurrentAidRecord`]
+    /// shape, lazily migrating legacy (V1) records.
+    ///
+    /// Stored [`AidRecord`] values predate the version field, so they are
+    /// treated as V1 on the wire and upgraded here (token is already bound on
+    /// the stored record, so no placeholder is needed).
+    pub fn get_aid_latest(env: Env, aid_id: u64) -> Option<shared::compat::CurrentAidRecord> {
+        let record = storage::get_aid(&env, aid_id)?;
+        let status = match record.status {
+            AidStatus::Pending => shared::compat::CompatAidStatus::Pending,
+            AidStatus::Settled => shared::compat::CompatAidStatus::Settled,
+            AidStatus::Refunded => shared::compat::CompatAidStatus::Refunded,
+        };
+        Some(shared::compat::CurrentAidRecord {
+            id: record.id,
+            donor: record.donor,
+            recipient: record.recipient,
+            token: record.token,
+            amount: record.amount,
+            expiry_ledger: record.expiry_ledger,
+            status,
+            schema_version: shared::compat::current_schema_version(),
+        })
+    }
+
+    /// Explicit legacy migration hook: validates that `aid_id` is readable
+    /// under the current schema. Stored records are already token-bound, so
+    /// this is a validation + TTL refresh (lazy migration completes on read).
+    pub fn migrate_legacy_aid(env: Env, aid_id: u64) -> Result<u32, shared::Error> {
+        let record = storage::get_aid(&env, aid_id).ok_or(shared::Error::NotFound)?;
+        if record.amount <= 0 {
+            return Err(shared::Error::SchemaMigrationFailed);
+        }
+        // Refresh TTL so the migrated record survives upcoming ledgers.
+        storage::set_aid(&env, aid_id, &record);
+        Ok(shared::compat::current_schema_version())
     }
 
     // -----------------------------------------------------------------------

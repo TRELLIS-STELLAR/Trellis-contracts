@@ -72,6 +72,18 @@ than once.
 5. Update this document whenever a new error code is introduced.
 6. Update the uniqueness and stability tests when adding a shared variant.
 
+## Compatibility, quota, and config helpers
+
+| Module | Purpose | Docs |
+|---|---|---|
+| `shared::compat` | Schema version metadata (`CURRENT_RECORD_SCHEMA_VERSION = 2`), `migrate_v1_to_v2` / `downgrade_v2_to_v1` transforms, `VersionedAidRecord` envelope | `docs/COMPATIBILITY.md` |
+| `shared::quota` | Per-actor `(actor, resource)` quota enforcement (`check_and_consume`), maintainer `get_quota_status` / `reset_quota` diagnostics, fail-open when unconfigured | `docs/QUOTA.md` |
+| `shared::config` | Typed env validation (`validate_full_config`, `Environment`), `UnsafeSecret` / `ConfigMissing` fail-fast errors, `RedactedSecret` previews that never print full secrets | `docs/CONFIGURATION.md` |
+
+Contributor health checks live in `scripts/diagnostics.sh` (see
+`docs/DIAGNOSTICS.md`); deployment config gating lives in
+`scripts/validate-config.sh`.
+
 ## Event schemas
 
 Protocol events use stable two-part topic tuples. Off-chain indexers should

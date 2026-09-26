@@ -2,10 +2,13 @@
 
 pub mod auth;
 pub mod batch;
+pub mod compat;
+pub mod config;
 pub mod errors;
 pub mod events;
 pub mod math;
 pub mod payments;
+pub mod quota;
 pub mod storage;
 pub mod utils;
 
@@ -17,6 +20,21 @@ pub use batch::{
     ABSOLUTE_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_SIZE,
 };
 pub use errors::Error;
+pub use compat::{
+    current_schema_version, downgrade_v2_to_v1, ensure_supported_version, from_latest,
+    is_deprecated_version, is_supported_version, migrate_v1_to_v2, new_current_record, to_latest,
+    CompatAidStatus, CurrentAidRecord, LegacyAidRecord, VersionedAidRecord,
+    CURRENT_RECORD_SCHEMA_VERSION, MAX_SUPPORTED_RECORD_SCHEMA_VERSION,
+    MIN_SUPPORTED_RECORD_SCHEMA_VERSION, RECORD_SCHEMA_V1, RECORD_SCHEMA_V2,
+};
+pub use config::{
+    validate_feature_flag, validate_full_config, validate_network_id, validate_rpc_url,
+    validate_secret_key, Environment, RedactedSecret,
+};
+pub use quota::{
+    check_and_consume, get_quota_config, get_quota_status, get_usage, reset_quota,
+    set_quota_config, QuotaConfig, QuotaStatus, QuotaUsage,
+};
 pub use events::{
     emit, emit_collection_registered, emit_nft_auction, emit_nft_bid, emit_nft_listed,
     emit_nft_offer, emit_nft_settle, emit_nft_sold, emit_royalty_paid, AID_CLAIMED, AID_CREATED,

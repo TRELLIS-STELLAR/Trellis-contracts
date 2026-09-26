@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod batch;
+pub mod canonical;
 pub mod compat;
 pub mod config;
 pub mod errors;
@@ -64,6 +65,11 @@ pub use storage::{
 };
 pub use utils::{is_expired, now};
 
+pub use canonical::{
+    canonical_bytes, canonical_fingerprint, canonicalize_legacy, ensure_supported_encoding,
+    is_legacy_encoding, normalize_int, normalize_text, parse_legacy_kv, CanonicalPart,
+    CANONICAL_ENCODING_VERSION, LEGACY_ENCODING_VERSION, MAX_FIELD_LEN,
+};
 #[cfg(test)]
 mod test_auth;
 #[cfg(test)]

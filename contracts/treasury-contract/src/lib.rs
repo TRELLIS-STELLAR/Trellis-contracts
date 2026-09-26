@@ -210,6 +210,9 @@ impl TreasuryContract {
         // Auth check last — all cheap validations have passed.
         auth::require_role(&env, &caller, Role::TreasuryManager)?;
 
+        // Quota enforcement (Issue #65): fail-open when unconfigured.
+        shared::quota::check_and_consume(&env, &caller, &symbol_short!("wdraw"), amount)?;
+
         let remaining = balance - amount;
         instance_set(&env, &key, &remaining);
 
@@ -350,6 +353,42 @@ impl TreasuryContract {
             env.ledger().timestamp(),
         );
 
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Quota management (Issue #65) — maintainer diagnostics & overrides
+    // -----------------------------------------------------------------------
+
+    /// Set quota limits for a resource (admin only).
+    pub fn set_quota_config(
+        env: Env,
+        caller: Address,
+        resource: Symbol,
+        config: shared::quota::QuotaConfig,
+    ) -> Result<(), Error> {
+        auth::require_admin(&env, &caller)?;
+        shared::quota::set_quota_config(&env, &resource, &config)
+    }
+
+    /// Inspect quota usage for an actor/resource pair (maintainer diagnostics).
+    pub fn quota_status(
+        env: Env,
+        actor: Address,
+        resource: Symbol,
+    ) -> shared::quota::QuotaStatus {
+        shared::quota::get_quota_status(&env, &actor, &resource)
+    }
+
+    /// Reset quota usage for an actor/resource pair (admin override path).
+    pub fn reset_quota(
+        env: Env,
+        caller: Address,
+        actor: Address,
+        resource: Symbol,
+    ) -> Result<(), Error> {
+        auth::require_admin(&env, &caller)?;
+        shared::quota::reset_quota(&env, &actor, &resource);
         Ok(())
     }
 }

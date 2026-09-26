@@ -46,6 +46,18 @@ pub enum Error {
     MetadataNotFound = 18,
     /// The contract or component was already initialized.
     AlreadyInitialized = 19,
+    /// The record uses a schema version this contract does not support.
+    UnsupportedSchemaVersion = 20,
+    /// A schema migration was attempted but failed validation.
+    SchemaMigrationFailed = 21,
+    /// The actor has exceeded its quota for this resource/operation.
+    QuotaExceeded = 22,
+    /// A required configuration value is missing.
+    ConfigMissing = 23,
+    /// A configuration value is present but malformed or out of range.
+    ConfigInvalid = 24,
+    /// A secret is unsafe (placeholder, too short, or production-like in local mode).
+    UnsafeSecret = 25,
 
     // ── Upgradeability errors (900–920) ──────────────────────────────────
     /// The target contract is not registered in the upgrade registry.

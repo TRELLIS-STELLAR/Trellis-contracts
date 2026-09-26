@@ -58,10 +58,17 @@ cargo install --locked soroban-cli
 ```bash
 git clone https://github.com/TRELLIS-STELLAR/Trellis-contracts.git
 cd Trellis-contracts
+./scripts/diagnostics.sh
 cargo test --workspace
 ```
 
 All tests should pass. If they do not, open an issue before proceeding.
+Run `./scripts/diagnostics.sh` first whenever setup fails — it checks tools,
+env vars, RPC reachability, and fixtures with actionable remediation text
+(see [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md)). Validate deployment config
+with `./scripts/validate-config.sh` (see
+[`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)); it fails fast on missing,
+malformed, or unsafe secrets without ever printing them in full.
 
 ---
 
@@ -174,6 +181,8 @@ Keep the subject line under 72 characters. No trailing period.
 2. **Write tests** for any new contract logic — a PR that adds behaviour without tests will not be merged.
 3. **Run CI locally** before pushing:
    ```bash
+   ./scripts/diagnostics.sh
+   ./scripts/validate-config.sh
    cargo fmt --all -- --check
    cargo clippy --workspace -- -D warnings
    cargo test --workspace

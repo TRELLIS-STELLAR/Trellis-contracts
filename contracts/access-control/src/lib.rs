@@ -46,6 +46,10 @@ pub enum AccessControlError {
     CannotRemoveSuperAdmin = 207,
     /// The role string is empty or otherwise invalid.
     InvalidRole = 208,
+    InvitationNotFound = 209,
+    InvitationExpired = 210,
+    RoleEscalation = 211,
+    RateLimitExceeded = 212,
 }
 
 type ContractResult<T> = core::result::Result<T, AccessControlError>;
@@ -67,6 +71,20 @@ enum DataKey {
     RoleExists(Symbol),
     /// Members of a role: `role -> Map<Address, bool>`.
     RoleMembers(Symbol),
+    /// Invitation data: `(invitee, role) -> Invitation`
+    Invitation(Address, Symbol),
+    /// Track invite count per inviter to rate limit: `inviter -> u32`
+    InviteCount(Address),
+    /// Track last invite time per inviter: `inviter -> u64`
+    LastInviteTime(Address),
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Invitation {
+    pub inviter: Address,
+    pub role: Symbol,
+    pub expires_at: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +97,9 @@ const EV_ROLE_REVOKED: Symbol = symbol_short!("ac_rv");
 const EV_ROLE_PARENT_SET: Symbol = symbol_short!("ac_ps");
 const EV_ADMIN_ADDED: Symbol = symbol_short!("ac_ad");
 const EV_ADMIN_REMOVED: Symbol = symbol_short!("ac_ar");
+const EV_INVITE_CREATED: Symbol = symbol_short!("ac_ic");
+const EV_INVITE_ACCEPTED: Symbol = symbol_short!("ac_ia");
+const EV_INVITE_REVOKED: Symbol = symbol_short!("ac_ir");
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -325,6 +346,110 @@ impl AccessControlContract {
     }
 
     // -----------------------------------------------------------------------
+    // Invitations
+    // -----------------------------------------------------------------------
+
+    /// Create an invitation for `invitee` to join `role`.
+    /// Caller must have the `role` or be an admin.
+    pub fn create_invitation(
+        env: Env,
+        caller: Address,
+        role: Symbol,
+        invitee: Address,
+        ttl_ledgers: u64,
+    ) -> Result<(), AccessControlError> {
+        caller.require_auth();
+        ensure_role_exists(&env, &role)?;
+
+        if role_exists(&env, &role) {
+            // Verify caller has the role (or is admin) to prevent role escalation.
+            let is_adm = is_admin_internal(&env, &caller);
+            if !is_adm && !has_role_recursive(&env, &role, &caller) {
+                return Err(AccessControlError::RoleEscalation);
+            }
+        }
+
+        // Rate limiting
+        let current_time = env.ledger().timestamp();
+        let last_time = env.storage().instance().get(&DataKey::LastInviteTime(caller.clone())).unwrap_or(0u64);
+        let mut count: u32 = env.storage().instance().get(&DataKey::InviteCount(caller.clone())).unwrap_or(0);
+        
+        // Reset count if more than 1 hour passed
+        if current_time > last_time + 3600 {
+            count = 0;
+        }
+        
+        if count >= 10 {
+            return Err(AccessControlError::RateLimitExceeded);
+        }
+        
+        env.storage().instance().set(&DataKey::LastInviteTime(caller.clone()), &current_time);
+        env.storage().instance().set(&DataKey::InviteCount(caller.clone()), &(count + 1));
+
+        let expires_at = current_time + ttl_ledgers; // ttl_ledgers here acts as time in seconds for simplicity
+        
+        let inv = Invitation {
+            inviter: caller.clone(),
+            role: role.clone(),
+            expires_at,
+        };
+        
+        env.storage().instance().set(&DataKey::Invitation(invitee.clone(), role.clone()), &inv);
+        env.events().publish((EV_INVITE_CREATED,), (caller, invitee, role));
+        Ok(())
+    }
+
+    /// Accept an invitation to `role`.
+    pub fn accept_invitation(
+        env: Env,
+        caller: Address,
+        role: Symbol,
+    ) -> Result<(), AccessControlError> {
+        caller.require_auth();
+        
+        let key = DataKey::Invitation(caller.clone(), role.clone());
+        if let Some(inv) = env.storage().instance().get::<DataKey, Invitation>(&key) {
+            let current_time = env.ledger().timestamp();
+            if current_time > inv.expires_at {
+                env.storage().instance().remove(&key);
+                return Err(AccessControlError::InvitationExpired);
+            }
+            
+            grant_role_internal(&env, &role, &caller);
+            env.storage().instance().remove(&key);
+            
+            env.events().publish((EV_INVITE_ACCEPTED,), (caller.clone(), role.clone()));
+            Ok(())
+        } else {
+            Err(AccessControlError::InvitationNotFound)
+        }
+    }
+
+    /// Revoke an invitation. Caller must be the original inviter or an admin.
+    pub fn revoke_invitation(
+        env: Env,
+        caller: Address,
+        role: Symbol,
+        invitee: Address,
+    ) -> Result<(), AccessControlError> {
+        caller.require_auth();
+        
+        let key = DataKey::Invitation(invitee.clone(), role.clone());
+        if let Some(inv) = env.storage().instance().get::<DataKey, Invitation>(&key) {
+            let is_adm = is_admin_internal(&env, &caller);
+            if !is_adm && inv.inviter != caller {
+                return Err(AccessControlError::RoleEscalation); // Or unauthorized
+            }
+            
+            env.storage().instance().remove(&key);
+            env.events().publish((EV_INVITE_REVOKED,), (caller, invitee, role));
+            Ok(())
+        } else {
+            Err(AccessControlError::InvitationNotFound)
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Off-chain read helpers
     // -----------------------------------------------------------------------
 
@@ -505,6 +630,15 @@ fn has_ancestor(env: &Env, role: &Symbol, ancestor_candidate: &Symbol) -> bool {
     }
 }
 
+fn is_admin_internal(env: &Env, caller: &Address) -> bool {
+    let admins: Map<Address, bool> = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admins)
+        .unwrap_or_else(|| Map::new(env));
+    admins.get(caller.clone()).unwrap_or(false)
+}
+
 /// Verify that `caller` is a registered admin.  Returns `NotAdmin` on failure.
 fn require_admin(env: &Env, caller: &Address) -> ContractResult<()> {
     let admins: Map<Address, bool> = env
@@ -552,6 +686,94 @@ mod tests {
 
     fn client_for<'a>(env: &'a Env, contract_id: &Address) -> AccessControlContractClient<'a> {
         AccessControlContractClient::new(env, contract_id)
+    }
+
+    // -----------------------------------------------------------------------
+    // Invitations
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn invitation_lifecycle() {
+        let (env, super_admin, contract_id) = setup();
+        let client = client_for(&env, &contract_id);
+        let role = Symbol::new(&env, "manager");
+        let invitee = Address::generate(&env);
+        
+        client.create_role(&super_admin, &role);
+        
+        client.create_invitation(&super_admin, &role, &invitee, &3600);
+        client.accept_invitation(&invitee, &role);
+        
+        assert!(client.has_role(&role, &invitee));
+    }
+    
+    #[test]
+    fn invitation_expired() {
+        let (env, super_admin, contract_id) = setup();
+        let client = client_for(&env, &contract_id);
+        let role = Symbol::new(&env, "manager");
+        let invitee = Address::generate(&env);
+        
+        client.create_role(&super_admin, &role);
+        
+        // 0 ttl means expires at current time
+        client.create_invitation(&super_admin, &role, &invitee, &0);
+        
+        // Advance time
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1;
+        });
+        
+        let result = client.try_accept_invitation(&invitee, &role);
+        assert!(matches!(result, Err(Ok(AccessControlError::InvitationExpired))));
+    }
+
+    #[test]
+    fn role_escalation_prevented() {
+        let (env, super_admin, contract_id) = setup();
+        let client = client_for(&env, &contract_id);
+        let role = Symbol::new(&env, "manager");
+        let user = Address::generate(&env);
+        let invitee = Address::generate(&env);
+        
+        client.create_role(&super_admin, &role);
+        
+        let result = client.try_create_invitation(&user, &role, &invitee, &3600);
+        assert!(matches!(result, Err(Ok(AccessControlError::RoleEscalation))));
+    }
+    
+    #[test]
+    fn rate_limit_enforced() {
+        let (env, super_admin, contract_id) = setup();
+        let client = client_for(&env, &contract_id);
+        let role = Symbol::new(&env, "manager");
+        
+        client.create_role(&super_admin, &role);
+        
+        for _ in 0..10 {
+            let invitee = Address::generate(&env);
+            client.create_invitation(&super_admin, &role, &invitee, &3600);
+        }
+        
+        let invitee = Address::generate(&env);
+        let result = client.try_create_invitation(&super_admin, &role, &invitee, &3600);
+        assert!(matches!(result, Err(Ok(AccessControlError::RateLimitExceeded))));
+    }
+
+    #[test]
+    fn invitation_revoked() {
+        let (env, super_admin, contract_id) = setup();
+        let client = client_for(&env, &contract_id);
+        let role = Symbol::new(&env, "manager");
+        let invitee = Address::generate(&env);
+        
+        client.create_role(&super_admin, &role);
+        client.create_invitation(&super_admin, &role, &invitee, &3600);
+        
+        client.revoke_invitation(&super_admin, &role, &invitee);
+        
+        let result = client.try_accept_invitation(&invitee, &role);
+        assert!(matches!(result, Err(Ok(AccessControlError::InvitationNotFound))));
     }
 
     // -----------------------------------------------------------------------

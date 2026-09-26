@@ -9,6 +9,7 @@ pub mod events;
 pub mod math;
 pub mod payments;
 pub mod quota;
+pub mod recovery;
 pub mod storage;
 pub mod utils;
 
@@ -20,6 +21,11 @@ pub use batch::{
     ABSOLUTE_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_SIZE,
 };
 pub use errors::Error;
+pub use recovery::{
+    abandon, complete_step, diagnostics, fail_step, is_stuck, next_action, open_operation,
+    resume, OperationKind, OperationState, RecoveryCheckpoint, RecoveryDiagnostics,
+    RecoveryError, RecoveryStep, StepOutcome,
+};
 pub use compat::{
     current_schema_version, downgrade_v2_to_v1, ensure_supported_version, from_latest,
     is_deprecated_version, is_supported_version, migrate_v1_to_v2, new_current_record, to_latest,

@@ -8,6 +8,7 @@ pub mod errors;
 pub mod events;
 pub mod math;
 pub mod payments;
+pub mod policy;
 pub mod quota;
 pub mod storage;
 pub mod utils;
@@ -57,6 +58,11 @@ pub use storage::{
 };
 pub use utils::{is_expired, now};
 
+pub use policy::{
+    evaluate, require_policy, validate_policy, PolicyConfig, PolicyDecision, PolicyInput,
+    PolicyReason, DEFAULT_ALLOWED_MAX_TIER, DEFAULT_MAX_AMOUNT, DEFAULT_MAX_DAILY_OPS,
+    DEFAULT_MIN_AMOUNT,
+};
 #[cfg(test)]
 mod test_auth;
 #[cfg(test)]

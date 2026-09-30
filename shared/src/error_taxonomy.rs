@@ -19,6 +19,7 @@ pub enum ErrorDomain {
     Marketplace,
     Upgradeability,
     Import,
+    Export,
 }
 
 /// Broad class used by clients to choose safe recovery behavior.
@@ -633,6 +634,58 @@ fn domain_definition(domain: &ErrorDomain, code: u32) -> Option<Definition> {
             ),
             _ => return None,
         }),
+        ErrorDomain::Export => Some(match code {
+            920 | 921 => definition(
+                "UNAUTHORIZED",
+                ErrorCategory::Authorization,
+                false,
+                "You are not authorized to complete this action.",
+                Some("Use an account with export permission or contact a maintainer."),
+            ),
+            922 => definition(
+                "EXPORT_TOO_LARGE",
+                ErrorCategory::Validation,
+                false,
+                "The export exceeds the maximum number of records.",
+                Some("Reduce the requested record count and retry."),
+            ),
+            923 => definition(
+                "EXPORT_INVALID_SCOPE",
+                ErrorCategory::Validation,
+                false,
+                "The requested export scope is invalid.",
+                Some("Choose a supported export scope."),
+            ),
+            924 => definition(
+                "EXPORT_EXPIRED",
+                ErrorCategory::Conflict,
+                false,
+                "This export has expired.",
+                Some("Generate a new export."),
+            ),
+            925 => definition(
+                "EXPORT_TTL_TOO_LONG",
+                ErrorCategory::Validation,
+                false,
+                "The requested export validity window is too long.",
+                Some("Choose a shorter validity window."),
+            ),
+            926 => definition(
+                "UNSUPPORTED_SCHEMA",
+                ErrorCategory::Configuration,
+                false,
+                "This export format is not supported by the current service version.",
+                Some("Contact a maintainer before retrying this operation."),
+            ),
+            927 => definition(
+                "EXPORT_INVALID_REQUEST",
+                ErrorCategory::Validation,
+                false,
+                "The export request contains invalid parameters.",
+                Some("Review the request parameters and submit corrected values."),
+            ),
+            _ => return None,
+        }),
         _ => None,
     }
 }
@@ -881,6 +934,7 @@ mod tests {
             (ErrorDomain::Oracle, 500, 510),
             (ErrorDomain::Upgradeability, 900, 911),
             (ErrorDomain::Import, 940, 948),
+            (ErrorDomain::Export, 920, 927),
             (ErrorDomain::Marketplace, 2000, 2023),
         ];
 

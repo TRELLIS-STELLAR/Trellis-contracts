@@ -14,6 +14,7 @@ pub mod disclosure;
 pub mod error_taxonomy;
 pub mod errors;
 pub mod events;
+pub mod export;
 pub mod feature_flags;
 pub mod health;
 pub mod history;
@@ -96,6 +97,15 @@ pub use dashboard::{
 pub use disclosure::{DetailField, DetailSeverity, TransactionDetail, TransactionDetailBuilder};
 pub use error_taxonomy::{describe_error, ErrorCategory, ErrorDomain, ErrorInfo};
 pub use errors::Error;
+pub use export::{
+    authorize_export, create_export, ensure_supported_version, generate_export, is_safe_field,
+    is_supported_version, redact_fields, register_export_artifact, scope_allows_record,
+    assert_records_visible, ExportArtifact, ExportError, ExportField, ExportFormat,
+    ExportMetadata, ExportRecord, ExportReport, ExportRequest, ExportScope, RecordSensitivity,
+    ABSOLUTE_MAX_EXPORT_RECORDS, CURRENT_EXPORT_SCHEMA_VERSION, DEFAULT_EXPORT_TTL_LEDGERS,
+    DEFAULT_MAX_EXPORT_RECORDS, EXPORT_SCHEMA_V1, MAX_EXPORT_TTL_LEDGERS,
+    MAX_SUPPORTED_EXPORT_SCHEMA_VERSION, MIN_SUPPORTED_EXPORT_SCHEMA_VERSION,
+};
 pub use events::{
     emit, emit_collection_registered, emit_import_committed, emit_import_failed,
     emit_import_simulated, emit_nft_auction, emit_nft_bid, emit_nft_listed, emit_nft_offer,

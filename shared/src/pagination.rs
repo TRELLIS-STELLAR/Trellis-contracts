@@ -1,4 +1,5 @@
 //! Stable deterministic pagination and filtering for rapidly changing datasets (Issue #42).
+//! Stable deterministic pagination and filtering for rapidly changing datasets (Issue #42).
 //!
 //! # Problem
 //! Offset-based pagination (`limit`, `offset`) produces unstable results when datasets change
@@ -15,6 +16,8 @@
 //! 5. Concurrently deleted, settled, or hidden records do not alter the ordering or absolute positions of unvisited keys.
 //! 6. Gas limit protection: `max_scan` bounds total items inspected per call, returning a partial page with `next_cursor`
 //!    when sparse filtering occurs, preventing out-of-gas transaction aborts.
+//! 7. Visibility-aware filtering: callbacks may exclude unauthorized or maintainer-only
+//!    events, and the pagination layer preserves stable ordering across filtered results.
 
 use soroban_sdk::{contracttype, Env, Vec};
 use crate::errors::Error;
@@ -35,6 +38,29 @@ pub const DEFAULT_MAX_SCAN: u32 = 256;
 pub enum Direction {
     Ascending,
     Descending,
+}
+
+/// Visibility classification for timeline events.
+///
+/// User-facing timelines must only surface `Public` and `Authorized` events.
+/// `MaintainerOnly` events are reserved for internal audit surfaces and must
+/// never be returned through user-facing pagination.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum EventVisibility {
+    /// Visible to any caller, including unauthenticated observers.
+    Public,
+    /// Visible only to callers authorized for the associated record/account.
+    Authorized,
+    /// Maintainer-only audit context; excluded from user-facing timelines.
+    MaintainerOnly,
+}
+
+impl EventVisibility {
+    /// Returns true when the event is eligible for user-facing timelines.
+    pub fn is_user_facing(&self) -> bool {
+        matches!(self, EventVisibility::Public | EventVisibility::Authorized)
+    }
 }
 
 /// Request parameters for stable keyset pagination.
@@ -95,6 +121,8 @@ pub struct PageResponse<T> {
 /// - `request`: Keyset pagination request (`cursor`, `limit`, `direction`).
 /// - `max_scan`: Upper bound on items evaluated in this call (gas protection).
 /// - `fetch_and_filter`: Callback `(id) -> Option<T>` returning `Some(item)` if the item exists and satisfies filters.
+///   Callbacks are responsible for enforcing visibility rules (e.g., excluding
+///   `MaintainerOnly` events and unauthorized records) before returning `Some`.
 pub fn paginate_id_range<T, F>(
     env: &Env,
     total_count: u64,
@@ -198,6 +226,8 @@ where
 }
 
 /// Helper function to perform stable keyset pagination over a sorted vector of IDs `Vec<u64>`.
+///
+/// The `ids` vector must be sorted ascending and stable; callers should not mutate it during iteration.
 pub fn paginate_id_list<T, F>(
     env: &Env,
     ids: &Vec<u64>,
@@ -274,3 +304,4 @@ where
         scanned_count: scanned,
     })
 }
+ 

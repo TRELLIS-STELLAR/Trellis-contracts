@@ -41,7 +41,7 @@ use shared::{record_action_audit_event, ResourceLink, TimelineEventType};
 use types::{FeedLatest, PriceSubmission};
 
 const MAX_FUTURE_SKEW_SECS: u64 = 60;
-const MIN_PRICE_QUORUM: u32 = 2;
+const DEFAULT_MIN_PRICE_QUORUM: u32 = 2;
 
 #[cfg(test)]
 mod tests;
@@ -57,6 +57,7 @@ impl OracleContract {
             shared::Error::AlreadyInitialized => OracleError::AlreadyInitialized,
             _ => OracleError::Unauthorized,
         })?;
+        storage::set_min_price_quorum(&env, DEFAULT_MIN_PRICE_QUORUM);
         emit_module_initialized(
             &env,
             symbol_short!("oracle"),
@@ -207,7 +208,60 @@ impl OracleContract {
 
     /// Get the latest price for a feed.
     pub fn get_latest_price(env: Env, feed_id: Symbol) -> Result<FeedLatest, OracleError> {
-        storage::get_feed_latest(&env, &feed_id).ok_or(OracleError::FeedNotFound)
+        if storage::get_feed_active_submissions(&env, &feed_id).len() == 0 {
+            return Err(OracleError::FeedNotFound);
+        }
+        aggregate_feed_latest(
+            &env,
+            &feed_id,
+            env.ledger().timestamp(),
+            storage::get_staleness_window(&env),
+        )
+        .ok_or(OracleError::InsufficientQuorum)
+    }
+
+    /// Configure the global minimum number of active price submitters. Admin only.
+    pub fn set_min_quorum(
+        env: Env,
+        caller: Address,
+        min_quorum: u32,
+    ) -> Result<(), OracleError> {
+        shared::auth::require_admin(&env, &caller).map_err(|_| OracleError::Unauthorized)?;
+        validate_quorum(&env, min_quorum)?;
+        storage::set_min_price_quorum(&env, min_quorum);
+        Ok(())
+    }
+
+    /// Set a per-feed quorum override. Admin only.
+    pub fn set_feed_quorum(
+        env: Env,
+        caller: Address,
+        feed_id: Symbol,
+        quorum: u32,
+    ) -> Result<(), OracleError> {
+        shared::auth::require_admin(&env, &caller).map_err(|_| OracleError::Unauthorized)?;
+        validate_quorum(&env, quorum)?;
+        storage::set_feed_quorum(&env, &feed_id, quorum);
+        Ok(())
+    }
+
+    /// Remove a feed-specific override so the global minimum applies again.
+    pub fn clear_feed_quorum(
+        env: Env,
+        caller: Address,
+        feed_id: Symbol,
+    ) -> Result<(), OracleError> {
+        shared::auth::require_admin(&env, &caller).map_err(|_| OracleError::Unauthorized)?;
+        storage::remove_feed_quorum(&env, &feed_id);
+        Ok(())
+    }
+
+    pub fn get_min_quorum(env: Env) -> u32 {
+        storage::min_price_quorum(&env)
+    }
+
+    pub fn get_feed_quorum(env: Env, feed_id: Symbol) -> u32 {
+        storage::feed_quorum(&env, &feed_id).unwrap_or(storage::min_price_quorum(&env))
     }
 
     /// Get submission history for a feed (latest N submissions).
@@ -288,7 +342,9 @@ fn aggregate_feed_latest(
         prices.push_back(submission.price);
     }
 
-    if prices.len() < MIN_PRICE_QUORUM {
+    let required_quorum = storage::feed_quorum(env, feed_id)
+        .unwrap_or(storage::min_price_quorum(env));
+    if prices.len() < required_quorum {
         return None;
     }
 
@@ -309,6 +365,13 @@ fn aggregate_feed_latest(
         timestamp: newest_timestamp,
         submission_count: prices.len() as u64,
     })
+}
+
+fn validate_quorum(env: &Env, quorum: u32) -> Result<(), OracleError> {
+    if quorum == 0 || quorum > storage::active_submitter_count(env) {
+        return Err(OracleError::InvalidQuorum);
+    }
+    Ok(())
 }
 
 fn sort_prices(prices: &mut Vec<i128>) {

@@ -5,7 +5,7 @@ use soroban_sdk::{
     contract, contractimpl, symbol_short,
     testutils::Ledger as _,
     testutils::{Address as _, Events},
-    Address, Env, Symbol, Vec,
+    token, Address, Env, Symbol, Vec,
 };
 use std::collections::BTreeMap;
 use std::format;
@@ -703,6 +703,122 @@ fn test_scheduled_action_rejected_before_window() {
     );
     assert_eq!(result, Err(Error::ActionNotYetValid));
     assert_eq!(client.category_balance(&token, &category), 500);
+}
+
+#[contract]
+struct MockReserveStrategy;
+
+#[contractimpl]
+impl MockReserveStrategy {
+    pub fn deposit_reserve(env: Env, token: Address, amount: i128) -> Result<(), Error> {
+        let key = (symbol_short!("position"), token);
+        let current: i128 = env.storage().instance().get(&key).unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&key, &current.checked_add(amount).ok_or(Error::Overflow)?);
+        Ok(())
+    }
+
+    pub fn withdraw_reserve(
+        env: Env,
+        token: Address,
+        recipient: Address,
+        amount: i128,
+    ) -> Result<i128, Error> {
+        let key = (symbol_short!("position"), token.clone());
+        let current: i128 = env.storage().instance().get(&key).unwrap_or(0);
+        if amount <= 0 || amount > current {
+            return Err(Error::InsufficientBalance);
+        }
+        token::Client::new(&env, &token).transfer(
+            &env.current_contract_address(),
+            &recipient,
+            &amount,
+        );
+        env.storage().instance().set(&key, &(current - amount));
+        Ok(amount)
+    }
+
+    pub fn harvest_yield(env: Env, token: Address, recipient: Address) -> Result<i128, Error> {
+        let key = symbol_short!("yield");
+        let amount: i128 = env.storage().instance().get(&key).unwrap_or(0);
+        if amount <= 0 {
+            return Err(Error::InsufficientBalance);
+        }
+        token::Client::new(&env, &token).transfer(
+            &env.current_contract_address(),
+            &recipient,
+            &amount,
+        );
+        env.storage().instance().set(&key, &0_i128);
+        Ok(amount)
+    }
+
+    pub fn set_yield(env: Env, amount: i128) {
+        env.storage().instance().set(&symbol_short!("yield"), &amount);
+    }
+}
+
+#[test]
+fn test_velocity_limit_rejects_rapid_outflows_and_rolls_over() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let token = env.register_stellar_asset_contract(admin.clone());
+    token::StellarAssetClient::new(&env, &token).mint(&admin, &2_000);
+    let category = symbol_short!("reserve");
+    let recipient = Address::generate(&env);
+    client.deposit(&admin, &token, &category, &2_000);
+    client.set_velocity_limit(&admin, &86_400, &1_000);
+
+    client.withdraw(&admin, &token, &recipient, &600, &category);
+    client.withdraw(&admin, &token, &recipient, &400, &category);
+    let status = client.velocity_status(&token);
+    assert_eq!(status.cumulative_outflow, 1_000);
+    assert!(status.paused);
+    assert_eq!(
+        client.try_withdraw(&admin, &token, &recipient, &100, &category),
+        Err(Ok(Error::OperationPaused))
+    );
+
+    env.ledger().set_timestamp(status.window_start + status.window_size_seconds);
+    client.withdraw(&admin, &token, &recipient, &100, &category);
+    assert_eq!(client.velocity_status(&token).cumulative_outflow, 100);
+}
+
+#[test]
+fn test_reserve_strategy_cap_recall_and_yield_accounting() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let token = env.register_stellar_asset_contract(admin.clone());
+    token::StellarAssetClient::new(&env, &token).mint(&admin, &1_000);
+    let category = symbol_short!("reserve");
+    client.deposit(&admin, &token, &category, &1_000);
+
+    let strategy_id = env.register_contract(None, MockReserveStrategy);
+    let strategy = MockReserveStrategyClient::new(&env, &strategy_id);
+    client.approve_reserve_strategy(&admin, &strategy_id);
+    assert_eq!(client.strategy_allocation_cap(), 3_000);
+    assert_eq!(
+        client.try_allocate_reserve(&admin, &token, &category, &strategy_id, &301),
+        Err(Ok(Error::InsufficientBalance))
+    );
+    client.allocate_reserve(&admin, &token, &category, &strategy_id, &300);
+    assert_eq!(client.strategy_position(&token, &category, &strategy_id), 300);
+
+    let recipient = Address::generate(&env);
+    client.withdraw(&admin, &token, &recipient, &800, &category);
+    assert_eq!(client.strategy_position(&token, &category, &strategy_id), 200);
+    assert_eq!(client.category_balance(&token, &category), 200);
+
+    token::StellarAssetClient::new(&env, &token).mint(&strategy_id, &50);
+    strategy.set_yield(&50);
+    assert_eq!(client.harvest_yield(&admin, &token, &strategy_id), 50);
+    assert_eq!(
+        client.category_balance(&token, &symbol_short!("yield")),
+        50
+    );
 }
 
 #[test]

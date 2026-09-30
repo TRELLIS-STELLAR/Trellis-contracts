@@ -1,6 +1,13 @@
 use crate::types::{FeedLatest, PriceSubmission, SubmitterInfo};
 use shared::storage::{persistent_get, persistent_set};
-use soroban_sdk::{symbol_short, Address, Env, Map, Symbol, Vec};
+use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, Vec};
+
+#[contracttype]
+#[derive(Clone)]
+enum DataKey {
+    MinPriceQuorum,
+    FeedQuorum(Symbol),
+}
 
 // Storage key symbols (all <= 9 chars for symbol_short!)
 const KEY_SUBMITTERS: Symbol = symbol_short!("submits");
@@ -30,6 +37,48 @@ pub fn is_submitter_active(env: &Env, submitter: &Address) -> bool {
         .get(submitter.clone())
         .map(|info| info.active)
         .unwrap_or(false)
+}
+
+/// Count currently active price submitters.
+pub fn active_submitter_count(env: &Env) -> u32 {
+    let mut count = 0;
+    for (_, info) in get_submitters(env).iter() {
+        if info.active {
+            count += 1;
+        }
+    }
+    count
+}
+
+pub fn min_price_quorum(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MinPriceQuorum)
+        .unwrap_or(2)
+}
+
+pub fn set_min_price_quorum(env: &Env, quorum: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MinPriceQuorum, &quorum);
+}
+
+pub fn feed_quorum(env: &Env, feed_id: &Symbol) -> Option<u32> {
+    env.storage()
+        .instance()
+        .get(&DataKey::FeedQuorum(feed_id.clone()))
+}
+
+pub fn set_feed_quorum(env: &Env, feed_id: &Symbol, quorum: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::FeedQuorum(feed_id.clone()), &quorum);
+}
+
+pub fn remove_feed_quorum(env: &Env, feed_id: &Symbol) {
+    env.storage()
+        .instance()
+        .remove(&DataKey::FeedQuorum(feed_id.clone()));
 }
 
 /// Register a new submitter.

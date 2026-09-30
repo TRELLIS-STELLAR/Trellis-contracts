@@ -27,4 +27,8 @@ pub enum OracleError {
     InternalError = 509,
     /// The contract has already been initialized.
     AlreadyInitialized = 510,
+    /// The requested quorum is invalid or exceeds the active submitter count.
+    InvalidQuorum = 511,
+    /// The feed does not currently have enough active submissions to meet quorum.
+    InsufficientQuorum = 512,
 }

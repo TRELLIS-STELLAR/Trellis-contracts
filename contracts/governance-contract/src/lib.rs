@@ -41,6 +41,7 @@ pub const MAX_GOVERNANCE_ADMINS: u32 = 20;
 pub const PROPOSAL_LIFETIME: u64 = 30 * 24 * 60 * 60;
 /// Maximum number of actions in a batch proposal.
 pub const MAX_BATCH_SIZE: u32 = 10;
+const DEFAULT_QUORUM_BPS: u32 = 6_000;
 
 type ContractResult<T> = core::result::Result<T, Error>;
 
@@ -50,6 +51,8 @@ type ContractResult<T> = core::result::Result<T, Error>;
 
 const KEY_THRESHOLD: Symbol = symbol_short!("thresh");
 const KEY_ADMIN_SET: Symbol = symbol_short!("adm_set");
+const KEY_ADMIN_COUNT: Symbol = symbol_short!("adm_cnt");
+const KEY_QUORUM_BPS: Symbol = symbol_short!("quorum");
 const KEY_PROP_CNT: Symbol = symbol_short!("prop_cnt");
 const KEY_PROPOSAL: Symbol = symbol_short!("proposal");
 const KEY_APPROVAL: Symbol = symbol_short!("approval");
@@ -167,6 +170,9 @@ impl GovernanceContract {
         if admin_set.len() < threshold || admin_set.len() > MAX_GOVERNANCE_ADMINS {
             return Err(Error::InvalidArgument);
         }
+        if has_duplicate_addresses(&admin_set) {
+            return Err(Error::InvalidArgument);
+        }
 
         shared::auth::initialize_admin(&env, &admin)?;
         // Grant the Admin role to every address in the admin set so they
@@ -181,6 +187,8 @@ impl GovernanceContract {
         // Store the threshold and admin set.
         instance_set(&env, &KEY_THRESHOLD, &threshold);
         instance_set(&env, &KEY_ADMIN_SET, &admin_set);
+        instance_set(&env, &KEY_ADMIN_COUNT, &admin_set.len());
+        instance_set(&env, &KEY_QUORUM_BPS, &DEFAULT_QUORUM_BPS);
 
         // Seed parameter defaults.
         seed_defaults(&env);
@@ -260,8 +268,35 @@ impl GovernanceContract {
         {
             return Err(Error::InvalidArgument);
         }
+        if has_duplicate_addresses(&new_admin_set) {
+            return Err(Error::InvalidArgument);
+        }
+
+        let old_admin_set = Self::get_admin_set(env.clone());
+        let mut i = 0;
+        while i < old_admin_set.len() {
+            let old_admin = old_admin_set.get(i).unwrap();
+            if !contains_address(&new_admin_set, &old_admin) {
+                shared::storage::persistent_remove(
+                    &env,
+                    &shared::auth::DataKey::Role(old_admin, Role::Admin),
+                );
+            }
+            i += 1;
+        }
+        i = 0;
+        while i < new_admin_set.len() {
+            let new_admin = new_admin_set.get(i).unwrap();
+            persistent_set(
+                &env,
+                &shared::auth::DataKey::Role(new_admin, Role::Admin),
+                &true,
+            );
+            i += 1;
+        }
         instance_set(&env, &KEY_THRESHOLD, &new_threshold);
         instance_set(&env, &KEY_ADMIN_SET, &new_admin_set);
+        instance_set(&env, &KEY_ADMIN_COUNT, &new_admin_set.len());
         Ok(())
     }
 
@@ -273,6 +308,26 @@ impl GovernanceContract {
     /// Returns the current admin set (N).
     pub fn get_admin_set(env: Env) -> soroban_sdk::Vec<Address> {
         instance_get(&env, &KEY_ADMIN_SET).unwrap_or(soroban_sdk::Vec::new(&env))
+    }
+
+    /// Returns the current number of active multi-signature admins.
+    pub fn get_active_admin_count(env: Env) -> u32 {
+        instance_get(&env, &KEY_ADMIN_COUNT).unwrap_or(Self::get_admin_set(env.clone()).len())
+    }
+
+    /// Sets the minimum percentage quorum in basis points. Admin only.
+    pub fn set_quorum_bps(env: Env, caller: Address, quorum_bps: u32) -> Result<(), Error> {
+        require_admin_role(&env, &caller)?;
+        if quorum_bps > 10_000 {
+            return Err(Error::InvalidArgument);
+        }
+        instance_set(&env, &KEY_QUORUM_BPS, &quorum_bps);
+        Ok(())
+    }
+
+    /// Returns the configured percentage quorum in basis points.
+    pub fn get_quorum_bps(env: Env) -> u32 {
+        instance_get(&env, &KEY_QUORUM_BPS).unwrap_or(DEFAULT_QUORUM_BPS)
     }
 
     /// Returns `true` if the contract is currently paused.
@@ -288,7 +343,7 @@ impl GovernanceContract {
     ///
     /// Returns the newly created proposal ID.
     pub fn propose(env: Env, caller: Address, action: ProposalAction) -> Result<u64, Error> {
-        require_admin_role(&env, &caller)?;
+        require_active_admin(&env, &caller)?;
 
         let proposal_id: u64 = instance_get(&env, &KEY_PROP_CNT).unwrap_or(0);
         let new_id = proposal_id.checked_add(1).ok_or(Error::Overflow)?;
@@ -322,7 +377,7 @@ impl GovernanceContract {
     ///
     /// Each admin may only approve a proposal once.
     pub fn approve(env: Env, caller: Address, proposal_id: u64) -> Result<(), Error> {
-        require_admin_role(&env, &caller)?;
+        require_active_admin(&env, &caller)?;
 
         let proposal_key = (KEY_PROPOSAL, proposal_id);
         let mut proposal: Proposal =
@@ -374,7 +429,7 @@ impl GovernanceContract {
     /// * `Error::AlreadyExecuted` — proposal already executed.
     /// * `Error::BelowThreshold` — approval count < threshold.
     pub fn execute(env: Env, caller: Address, proposal_id: u64) -> Result<(), Error> {
-        require_admin_role(&env, &caller)?;
+        require_active_admin(&env, &caller)?;
 
         let proposal_key = (KEY_PROPOSAL, proposal_id);
         let mut proposal: Proposal =
@@ -401,7 +456,13 @@ impl GovernanceContract {
         }
 
         let threshold: u32 = instance_get(&env, &KEY_THRESHOLD).unwrap_or(0);
-        if proposal.approval_count < threshold {
+        let active_admins = Self::get_admin_set(env.clone());
+        let active_count = instance_get(&env, &KEY_ADMIN_COUNT).unwrap_or(active_admins.len());
+        let quorum_bps = Self::get_quorum_bps(env.clone());
+        let quorum_approvals = ((active_count as u64 * quorum_bps as u64 + 9_999) / 10_000) as u32;
+        let required_approvals = threshold.max(quorum_approvals);
+        let valid_approvals = count_active_approvals(&env, proposal_id, &active_admins);
+        if valid_approvals < required_approvals {
             return Err(Error::BelowThreshold);
         }
 
@@ -526,6 +587,60 @@ impl GovernanceContract {
 /// Requires the caller to hold the `Admin` role.
 fn require_admin_role(env: &Env, caller: &Address) -> ContractResult<()> {
     auth::require_permission(env, caller, shared::auth::Permission::ManageRoles)
+}
+
+fn require_active_admin(env: &Env, caller: &Address) -> ContractResult<()> {
+    require_admin_role(env, caller)?;
+    let admin_set: soroban_sdk::Vec<Address> =
+        instance_get(env, &KEY_ADMIN_SET).unwrap_or(soroban_sdk::Vec::new(env));
+    if !contains_address(&admin_set, caller) {
+        return Err(Error::Unauthorized);
+    }
+    Ok(())
+}
+
+fn contains_address(admin_set: &soroban_sdk::Vec<Address>, address: &Address) -> bool {
+    let mut i = 0;
+    while i < admin_set.len() {
+        if admin_set.get(i).unwrap() == *address {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn has_duplicate_addresses(admin_set: &soroban_sdk::Vec<Address>) -> bool {
+    let mut i = 0;
+    while i < admin_set.len() {
+        let address = admin_set.get(i).unwrap();
+        let mut j = i + 1;
+        while j < admin_set.len() {
+            if admin_set.get(j).unwrap() == address {
+                return true;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn count_active_approvals(
+    env: &Env,
+    proposal_id: u64,
+    admin_set: &soroban_sdk::Vec<Address>,
+) -> u32 {
+    let mut count = 0;
+    let mut i = 0;
+    while i < admin_set.len() {
+        let approval_key = (KEY_APPROVAL, proposal_id, admin_set.get(i).unwrap());
+        if instance_get::<_, bool>(env, &approval_key).unwrap_or(false) {
+            count += 1;
+        }
+        i += 1;
+    }
+    count
 }
 
 /// Requires the caller to be the admin (for backward-compatible parameter
@@ -944,6 +1059,61 @@ mod tests {
         let proposal = client.get_proposal(&proposal_id);
         assert_eq!(proposal.status, ProposalStatus::Executed);
         assert!(client.is_paused());
+    }
+
+    #[test]
+    fn execute_quorum_escalates_when_admin_set_grows() {
+        let (env, client, admin) = setup();
+        let mut admins = client.get_admin_set();
+        admins.push_back(Address::generate(&env));
+        admins.push_back(Address::generate(&env));
+        client.set_admin_set(&admin, &admins, &1);
+        assert_eq!(client.get_active_admin_count(), 4);
+
+        let proposal_id = client.propose(&admin, &ProposalAction::Pause);
+        client.approve(&admin, &proposal_id);
+        client.approve(&admins.get(1).unwrap(), &proposal_id);
+        assert_eq!(
+            client.try_execute(&admin, &proposal_id),
+            Err(Ok(Error::BelowThreshold))
+        );
+        client.approve(&admins.get(2).unwrap(), &proposal_id);
+        client.execute(&admin, &proposal_id);
+    }
+
+    #[test]
+    fn execute_quorum_recalculates_when_admin_set_shrinks() {
+        let (env, client, admin) = setup();
+        let mut expanded_admins = client.get_admin_set();
+        expanded_admins.push_back(Address::generate(&env));
+        expanded_admins.push_back(Address::generate(&env));
+        client.set_admin_set(&admin, &expanded_admins, &1);
+
+        let proposal_id = client.propose(&admin, &ProposalAction::Pause);
+        let first = expanded_admins.get(0).unwrap();
+        let second = expanded_admins.get(1).unwrap();
+        client.approve(&first, &proposal_id);
+        client.approve(&second, &proposal_id);
+        assert_eq!(
+            client.try_execute(&admin, &proposal_id),
+            Err(Ok(Error::BelowThreshold))
+        );
+
+        let mut reduced_admins = soroban_sdk::Vec::new(&env);
+        reduced_admins.push_back(first);
+        reduced_admins.push_back(second);
+        client.set_admin_set(&admin, &reduced_admins, &1);
+        assert_eq!(client.get_active_admin_count(), 2);
+        client.execute(&admin, &proposal_id);
+    }
+
+    #[test]
+    fn quorum_bps_rejects_values_above_one_hundred_percent() {
+        let (_env, client, admin) = setup();
+        assert_eq!(
+            client.try_set_quorum_bps(&admin, &10_001),
+            Err(Ok(Error::InvalidArgument))
+        );
     }
 
     #[test]

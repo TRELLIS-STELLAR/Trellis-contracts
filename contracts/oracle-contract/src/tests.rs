@@ -142,6 +142,74 @@ fn test_deactivate_submitter_success() {
     assert!(!client.is_submitter_active(&fx.submitter1));
 }
 
+#[test]
+fn test_min_quorum_updates_runtime_aggregation() {
+    let fx = setup();
+    let client = OracleContractClient::new(&fx.env, &fx.contract_id);
+    client.register_submitter(&fx.admin, &fx.submitter1);
+    client.register_submitter(&fx.admin, &fx.submitter2);
+    let feed_id = symbol_short!("BTCUSD");
+    let now = fx.env.ledger().timestamp();
+    client.submit_price(&fx.submitter1, &feed_id, &100, &8, &now, &1);
+
+    assert_eq!(
+        client.try_get_latest_price(&feed_id),
+        Err(Ok(OracleError::InsufficientQuorum))
+    );
+    client.set_min_quorum(&fx.admin, &1);
+    assert_eq!(client.get_min_quorum(), 1);
+    assert_eq!(client.get_latest_price(&feed_id).submission_count, 1);
+
+    client.set_min_quorum(&fx.admin, &2);
+    client.submit_price(&fx.submitter2, &feed_id, &102, &8, &now, &1);
+    assert_eq!(client.get_latest_price(&feed_id).submission_count, 2);
+}
+
+#[test]
+fn test_min_quorum_validates_active_submitter_count() {
+    let fx = setup();
+    let client = OracleContractClient::new(&fx.env, &fx.contract_id);
+    assert_eq!(
+        client.try_set_min_quorum(&fx.admin, &0),
+        Err(Ok(OracleError::InvalidQuorum))
+    );
+    assert_eq!(
+        client.try_set_min_quorum(&fx.admin, &1),
+        Err(Ok(OracleError::InvalidQuorum))
+    );
+    client.register_submitter(&fx.admin, &fx.submitter1);
+    assert_eq!(
+        client.try_set_min_quorum(&fx.admin, &2),
+        Err(Ok(OracleError::InvalidQuorum))
+    );
+    client.set_min_quorum(&fx.admin, &1);
+    assert_eq!(client.get_min_quorum(), 1);
+}
+
+#[test]
+fn test_feed_quorum_override_and_clear() {
+    let fx = setup();
+    let client = OracleContractClient::new(&fx.env, &fx.contract_id);
+    client.register_submitter(&fx.admin, &fx.submitter1);
+    client.register_submitter(&fx.admin, &fx.submitter2);
+    client.set_min_quorum(&fx.admin, &1);
+    let feed_id = symbol_short!("BTCUSD");
+    client.set_feed_quorum(&fx.admin, &feed_id, &2);
+    assert_eq!(client.get_feed_quorum(&feed_id), 2);
+
+    let now = fx.env.ledger().timestamp();
+    client.submit_price(&fx.submitter1, &feed_id, &100, &8, &now, &1);
+    assert_eq!(
+        client.try_get_latest_price(&feed_id),
+        Err(Ok(OracleError::InsufficientQuorum))
+    );
+    client.submit_price(&fx.submitter2, &feed_id, &102, &8, &now, &1);
+    assert_eq!(client.get_latest_price(&feed_id).submission_count, 2);
+
+    client.clear_feed_quorum(&fx.admin, &feed_id);
+    assert_eq!(client.get_feed_quorum(&feed_id), 1);
+}
+
 
 #[test]
 fn test_deactivate_submitter_unauthorized_fails() {
@@ -513,7 +581,7 @@ fn test_get_latest_price_after_submit() {
     assert_eq!(latest.price, price);
     assert_eq!(latest.decimals, 8);
     assert_eq!(latest.timestamp, ts);
-    assert_eq!(latest.submission_count, 1);
+    assert_eq!(latest.submission_count, 2);
 }
 
 
@@ -555,7 +623,7 @@ fn test_get_latest_price_most_recent() {
         &1u64,
     );
     let l1 = client.try_get_latest_price(&feed_id);
-    assert_eq!(l1, Err(Ok(OracleError::FeedNotFound)));
+    assert_eq!(l1, Err(Ok(OracleError::InsufficientQuorum)));
 
     client.submit_price(
         &fx.submitter2,

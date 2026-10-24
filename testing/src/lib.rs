@@ -8,6 +8,8 @@
 extern crate alloc;
 
 pub mod concurrency;
+#[cfg(test)]
+mod concurrency_dup_stale;
 pub mod examples;
 pub mod fault_injection;
 pub mod fuzzing;

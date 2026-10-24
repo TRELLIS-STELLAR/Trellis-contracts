@@ -7,6 +7,7 @@ pub mod auth;
 pub mod backfill;
 pub mod batch;
 pub mod batch_retry;
+pub mod bounded_cache;
 pub mod canonical;
 pub mod chaos;
 pub mod client;
@@ -15,6 +16,7 @@ pub mod compat;
 pub mod config;
 pub mod config_version;
 pub mod domain_events;
+pub mod dry_run_policy;
 pub mod dashboard;
 pub mod degradation;
 pub mod degraded_mode;
@@ -188,6 +190,7 @@ IMPORT_COMMITTED, IMPORT_FAILED, IMPORT_SIMULATED, PARAMETER_CHANGED, PAYMENT_ES
 PAYMENT_ESCROW_REFUNDED, PAYMENT_ESCROW_RELEASED, PAYMENT_FEE, PAYMENT_TRANSFER,
 REFERRAL_ACCRUED, REFERRAL_REGISTERED, REFERRER_SET, TIER_CONFIG_SET, TREASURY_DEPOSIT,
 TREASURY_EMERGENCY_WITHDRAW, TREASURY_SET, TREASURY_WITHDRAW,
+};
 pub use event_dead_letter::{
     dead_letter_ids as event_dead_letter_ids, discard_dead_letter as discard_event_dead_letter,
     dispatch_event, get_dead_letter as get_event_dead_letter, pending_dead_letter_ids,
@@ -408,6 +411,17 @@ pub use policy_preview::{
     PolicyParameters, PolicySimulationError, PolicySimulationPreview, PolicyType,
     ProposedPolicyChange, RollbackConstraintReport, SideEffectSummary, DEFAULT_PREVIEW_VALIDITY_LEDGERS,
     TOPIC_POLICY_COMMIT, TOPIC_POLICY_ROLLBACK, TOPIC_POLICY_SIMULATION,
+};
+pub use bounded_cache::{
+    get as cache_get, initialize as cache_initialize, invalidate as cache_invalidate,
+    invalidate_all as cache_invalidate_all, put as cache_put, stats as cache_stats,
+    validate_config as validate_cache_config, CacheConfig, CacheEntry, CacheError, CacheMeta,
+    CacheStats, ABSOLUTE_MAX_CAPACITY, DEFAULT_MAX_AGE_LEDGERS, DEFAULT_MAX_CAPACITY,
+    TOPIC_CACHE_EVICT,
+};
+pub use dry_run_policy::{
+    dry_run_evaluate, DryRunError, DryRunReport, DryRunSummary, ImpactKind, RecordSnapshot,
+    RecordVerdict, MAX_DRY_RUN_RECORDS, TOPIC_DRY_RUN,
 };
 pub use utils::{is_expired, now};
 pub use snapshot_restore::{

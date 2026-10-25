@@ -13,6 +13,8 @@ pub mod chaos;
 pub mod client;
 pub mod client_validation;
 pub mod compat;
+pub mod conflict_resolver;
+pub use conflict_resolver::{resolve_conflict_pair, ConflictCandidate, ConflictResolutionResult, ConflictWinner};
 pub mod config;
 pub mod config_version;
 pub mod domain_events;

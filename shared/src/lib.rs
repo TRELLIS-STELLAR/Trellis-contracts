@@ -13,6 +13,8 @@ pub mod chaos;
 pub mod client;
 pub mod client_validation;
 pub mod compat;
+pub mod conflict_resolver;
+pub use conflict_resolver::{resolve_conflict_pair, ConflictCandidate, ConflictResolutionResult, ConflictWinner};
 pub mod config;
 pub mod config_version;
 pub mod domain_events;
@@ -222,8 +224,9 @@ SupportAccessNotice,
 DEFAULT_SESSION_DURATION, MAX_CONCURRENT_SESSIONS, MAX_SESSION_DURATION,
 };
 pub use import::{
-compute_batch_fingerprint, dry_run as dry_run_import, execute_import,
+cancel_import, compute_batch_fingerprint, dry_run as dry_run_import, execute_import,
 generate_rollback_guidance, get_import_counter, get_imported_record, has_imported_record,
+is_import_cancelled,
 validate_config as validate_import_config, DuplicatePolicy, ImportConfig, ImportError,
 ImportItem, ImportMode, ImportReport, RollbackGuidance, RowError, StoredImportRecord,
 ABSOLUTE_MAX_IMPORT_SIZE, DEFAULT_MAX_IMPORT_SIZE, MAX_EXTERNAL_ID_LEN,

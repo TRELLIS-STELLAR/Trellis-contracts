@@ -767,6 +767,22 @@ fn test_stable_cursor_pagination_on_aid_contract() {
 }
 
 #[test]
+fn owner_pagination_respects_bounds_and_filtering() {
+    let fx = setup();
+    let client = AidContractClient::new(&fx.env, &fx.contract_id);
+    let expiry = fx.env.ledger().sequence() + 1000;
+    let first = client.create_aid(&fx.donor, &fx.recipient, &100, &expiry, &None);
+    let second = client.create_aid(&fx.donor, &fx.recipient, &200, &expiry, &None);
+    let page = client.list_aids_by_donor_cursor(&fx.donor, &None, &1);
+    assert_eq!(page.records.len(), 1);
+    assert_eq!(page.records.get(0).unwrap().id, first);
+    assert_eq!(page.next_cursor, Some(first));
+    let next = client.list_aids_by_donor_cursor(&fx.donor, &page.next_cursor, &1);
+    assert_eq!(next.records.len(), 1);
+    assert_eq!(next.records.get(0).unwrap().id, second);
+}
+
+#[test]
 fn test_cursor_pagination_under_inserts_deletes_and_permission_changes() {
     let fx = setup();
     let client = AidContractClient::new(&fx.env, &fx.contract_id);

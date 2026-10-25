@@ -72,6 +72,9 @@ const LAST_BATCH_KEY: Symbol = symbol_short!("imp_last");
 /// Instance storage key for the last committed batch record count (rollback anchor).
 const LAST_BATCH_COUNT_KEY: Symbol = symbol_short!("imp_lcnt");
 
+/// Persistent cooperative-cancellation marker for an import fingerprint.
+const IMPORT_CANCEL_KEY: Symbol = symbol_short!("imp_cancel");
+
 // ----------------------------------------------------------------------------
 // Error Codes (Range 940–949)
 // ----------------------------------------------------------------------------
@@ -101,6 +104,8 @@ pub enum ImportError {
     ExternalIdTooLong = 948,
     /// Recipient address is invalid.
     InvalidRecipient = 949,
+    /// The batch was cancelled before its commit phase.
+    ImportCancelled = 950,
 }
 
 /// A quarantined row captured for operator review and remediation.
@@ -666,6 +671,11 @@ pub fn execute_import(
 
     let fingerprint = compute_batch_fingerprint(env, items);
 
+    if is_import_cancelled(env, &fingerprint) {
+        release_reentrancy_guard(env);
+        return Err(ImportError::ImportCancelled);
+    }
+
     // Atomic mode: validate the whole batch before any persistent write so a
     // single invalid row leaves the ledger state untouched.
     if config.mode == ImportMode::AllOrNothing {
@@ -729,6 +739,21 @@ pub fn execute_import(
         quarantined: outcome.quarantined,
         batch_fingerprint: fingerprint,
     })
+}
+
+/// Request cancellation of a pending import before it reaches its commit
+/// phase. The marker is keyed by the deterministic batch fingerprint, so a
+/// retry of the same batch observes the same decision and cannot partially
+/// apply after an operator has stopped it.
+pub fn cancel_import(env: &Env, caller: &Address, fingerprint: &BytesN<32>) -> Result<(), ImportError> {
+    caller.require_auth();
+    instance_set(env, &(IMPORT_CANCEL_KEY, fingerprint.clone()), &true);
+    Ok(())
+}
+
+/// Returns whether an operator has cancelled this import fingerprint.
+pub fn is_import_cancelled(env: &Env, fingerprint: &BytesN<32>) -> bool {
+    instance_get(env, &(IMPORT_CANCEL_KEY, fingerprint.clone())).unwrap_or(false)
 }
 
 // ----------------------------------------------------------------------------

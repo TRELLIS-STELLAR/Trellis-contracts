@@ -78,6 +78,13 @@ pub enum AccessControlError {
     InvalidExpiry = 222,
     /// The requested role-grant duration is zero or otherwise invalid.
     InvalidDuration = 223,
+    CapabilityNotFound = 224,
+    CapabilityUnauthorized = 225,
+    CapabilityExpired = 226,
+    CapabilityExhausted = 227,
+    CapabilityRevoked = 228,
+    CapabilityActionMismatch = 229,
+    InvalidCapabilityLifetime = 230,
 }
 
 type ContractResult<T> = core::result::Result<T, AccessControlError>;
@@ -139,6 +146,24 @@ enum DataKey {
     PausedAt(Symbol),
     /// Pending super-admin transfer: `PendingOwnershipTransfer`
     PendingSuperAdmin,
+    CapabilityNextId,
+    Capability(u64),
+}
+
+pub const MAX_CAPABILITY_LIFETIME: u64 = 7 * 24 * 60 * 60;
+pub const MAX_CAPABILITY_USES: u32 = 100;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CapabilityToken {
+    pub id: u64,
+    pub action: Symbol,
+    pub grantee: Address,
+    pub issuer: Address,
+    pub expires_at: u64,
+    pub max_uses: u32,
+    pub uses: u32,
+    pub revoked: bool,
 }
 
 #[contracttype]
@@ -285,6 +310,25 @@ impl AccessControlContract {
     /// yield [`AccessControlError::InvalidPauseScope`].
     pub fn pause(env: Env, caller: Address, scope: Symbol) -> Result<(), AccessControlError> {
         require_action(&env, &caller, &Action::ManageMaintainers)?;
+        Self::pause_internal(&env, &caller, scope)
+    }
+
+    /// Pause a scope using a valid single-action capability instead of a
+    /// standing admin role.
+    pub fn pause_with_capability(
+        env: Env,
+        caller: Address,
+        scope: Symbol,
+        capability_id: u64,
+    ) -> Result<(), AccessControlError> {
+        if !is_valid_pause_scope(&scope) {
+            return Err(AccessControlError::InvalidPauseScope);
+        }
+        Self::consume_capability(env.clone(), caller.clone(), capability_id, symbol_short!("pause"))?;
+        Self::pause_internal(&env, &caller, scope)
+    }
+
+    fn pause_internal(env: &Env, caller: &Address, scope: Symbol) -> Result<(), AccessControlError> {
         if !is_valid_pause_scope(&scope) {
             return Err(AccessControlError::InvalidPauseScope);
         }
@@ -948,6 +992,82 @@ impl AccessControlContract {
         env.events()
             .publish((EV_ROLE_GRANTED,), (role, account, caller, expires_at));
         Ok(())
+    }
+
+    /// Issue a narrow, expiring capability that can be consumed by `grantee`
+    /// for one sensitive action. Existing role checks remain unchanged.
+    pub fn issue_capability(
+        env: Env,
+        issuer: Address,
+        grantee: Address,
+        action: Symbol,
+        lifetime_seconds: u64,
+        max_uses: u32,
+    ) -> Result<u64, AccessControlError> {
+        issuer.require_auth();
+        if !Self::is_admin(env.clone(), issuer.clone()) {
+            return Err(AccessControlError::NotAdmin);
+        }
+        if lifetime_seconds == 0 || lifetime_seconds > MAX_CAPABILITY_LIFETIME
+            || max_uses == 0 || max_uses > MAX_CAPABILITY_USES
+        {
+            return Err(AccessControlError::InvalidCapabilityLifetime);
+        }
+        let id = env.storage().instance().get::<DataKey, u64>(&DataKey::CapabilityNextId).unwrap_or(0);
+        env.storage().instance().set(&DataKey::CapabilityNextId, &(id + 1));
+        let token = CapabilityToken {
+            id,
+            action,
+            grantee,
+            issuer,
+            expires_at: env.ledger().timestamp().saturating_add(lifetime_seconds),
+            max_uses,
+            uses: 0,
+            revoked: false,
+        };
+        env.storage().instance().set(&DataKey::Capability(id), &token);
+        Ok(id)
+    }
+
+    /// Consume one use of a capability after checking caller, action, expiry,
+    /// revocation, and the remaining use budget.
+    pub fn consume_capability(
+        env: Env,
+        caller: Address,
+        capability_id: u64,
+        action: Symbol,
+    ) -> Result<Address, AccessControlError> {
+        caller.require_auth();
+        let key = DataKey::Capability(capability_id);
+        let mut token = env.storage().instance().get::<DataKey, CapabilityToken>(&key)
+            .ok_or(AccessControlError::CapabilityNotFound)?;
+        if token.revoked { return Err(AccessControlError::CapabilityRevoked); }
+        if token.grantee != caller { return Err(AccessControlError::CapabilityUnauthorized); }
+        if token.action != action { return Err(AccessControlError::CapabilityActionMismatch); }
+        if env.ledger().timestamp() >= token.expires_at { return Err(AccessControlError::CapabilityExpired); }
+        if token.uses >= token.max_uses { return Err(AccessControlError::CapabilityExhausted); }
+        token.uses += 1;
+        env.storage().instance().set(&key, &token);
+        Ok(token.issuer)
+    }
+
+    /// Revoke a capability. The issuer or any admin may revoke it.
+    pub fn revoke_capability(env: Env, caller: Address, capability_id: u64) -> Result<(), AccessControlError> {
+        caller.require_auth();
+        let key = DataKey::Capability(capability_id);
+        let mut token = env.storage().instance().get::<DataKey, CapabilityToken>(&key)
+            .ok_or(AccessControlError::CapabilityNotFound)?;
+        if token.issuer != caller && !Self::is_admin(env.clone(), caller.clone()) {
+            return Err(AccessControlError::CapabilityUnauthorized);
+        }
+        token.revoked = true;
+        env.storage().instance().set(&key, &token);
+        Ok(())
+    }
+
+    /// Read a capability token for audit and recovery tooling.
+    pub fn get_capability(env: Env, capability_id: u64) -> Option<CapabilityToken> {
+        env.storage().instance().get(&DataKey::Capability(capability_id))
     }
 
     /// Returns the expiration ledger timestamp for `user`'s direct grant of
@@ -2542,6 +2662,31 @@ mod tests {
         assert_eq!(pause.attribute, Some(scope.clone()));
         assert_eq!(pause.before, Some(0));
         assert_eq!(pause.after, Some(1));
+    }
+
+    #[test]
+    fn capability_is_single_use_authorized_and_expiring() {
+        let (env, super_admin, contract_id) = setup();
+        let client = client_for(&env, &contract_id);
+        let grantee = Address::generate(&env);
+        let action = symbol_short!("pause");
+        let id = client.issue_capability(&super_admin, &grantee, &action, &100, &1);
+
+        assert_eq!(client.consume_capability(&grantee, &id, &action), super_admin);
+        assert_eq!(client.try_consume_capability(&grantee, &id, &action), Err(Ok(AccessControlError::CapabilityExhausted)));
+        env.ledger().set_timestamp(101);
+        assert_eq!(client.try_consume_capability(&grantee, &id, &action), Err(Ok(AccessControlError::CapabilityExpired)));
+    }
+
+    #[test]
+    fn capability_rejects_wrong_action_and_can_be_revoked() {
+        let (env, super_admin, contract_id) = setup();
+        let client = client_for(&env, &contract_id);
+        let grantee = Address::generate(&env);
+        let id = client.issue_capability(&super_admin, &grantee, &symbol_short!("pause"), &100, &2);
+        assert_eq!(client.try_consume_capability(&grantee, &id, &symbol_short!("transfer")), Err(Ok(AccessControlError::CapabilityActionMismatch)));
+        client.revoke_capability(&super_admin, &id);
+        assert_eq!(client.try_consume_capability(&grantee, &id, &symbol_short!("pause")), Err(Ok(AccessControlError::CapabilityRevoked)));
     }
 
 }

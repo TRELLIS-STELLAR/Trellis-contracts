@@ -1,4 +1,5 @@
 #![no_std]
+pub mod allowlist_validator;
 pub mod abuse;
 pub mod accessibility;
 pub mod analytics;

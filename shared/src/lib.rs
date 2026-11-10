@@ -1,4 +1,5 @@
 #![no_std]
+pub mod side_effect_checkpoints;
 pub mod abuse;
 pub mod accessibility;
 pub mod analytics;

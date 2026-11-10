@@ -1,4 +1,5 @@
 #![no_std]
+pub mod burst_cardinality_load;
 pub mod abuse;
 pub mod accessibility;
 pub mod analytics;

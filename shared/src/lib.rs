@@ -1,4 +1,5 @@
 #![no_std]
+pub mod deployment_rollback_verify;
 pub mod abuse;
 pub mod accessibility;
 pub mod analytics;

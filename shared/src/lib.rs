@@ -1,4 +1,5 @@
 #![no_std]
+pub mod synthetic_monitoring;
 pub mod abuse;
 pub mod accessibility;
 pub mod analytics;

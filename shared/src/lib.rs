@@ -1,4 +1,5 @@
 #![no_std]
+pub mod session_revocation;
 pub mod abuse;
 pub mod accessibility;
 pub mod analytics;

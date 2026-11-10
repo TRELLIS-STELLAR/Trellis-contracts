@@ -1,4 +1,5 @@
 #![no_std]
+pub mod remediation_catalog;
 pub mod abuse;
 pub mod accessibility;
 pub mod analytics;

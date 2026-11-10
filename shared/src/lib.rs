@@ -1,4 +1,5 @@
 #![no_std]
+pub mod permission_diff;
 pub mod abuse;
 pub mod accessibility;
 pub mod analytics;

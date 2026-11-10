@@ -1,4 +1,5 @@
 #![no_std]
+pub mod failure_recovery_fixtures;
 pub mod abuse;
 pub mod accessibility;
 pub mod analytics;

@@ -1,4 +1,5 @@
 #![no_std]
+pub mod versioned_event_replay;
 pub mod abuse;
 pub mod accessibility;
 pub mod analytics;

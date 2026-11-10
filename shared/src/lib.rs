@@ -1,4 +1,5 @@
 #![no_std]
+pub mod deterministic_sort;
 pub mod abuse;
 pub mod accessibility;
 pub mod analytics;

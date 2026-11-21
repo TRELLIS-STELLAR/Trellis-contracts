@@ -552,6 +552,107 @@ impl TreasuryContract {
         instance_get::<_, i128>(&env, &(BALANCE, token, category)).unwrap_or(0)
     }
 
+    /// Reallocate `amount` of `token` from `from_category` to `to_category`
+    /// within the treasury, with a full audit trail (Issue #541).
+    ///
+    /// This is a **governance/budget** operation, distinct from routine fund
+    /// movement: it re-labels existing holdings between accounting categories
+    /// and performs **no token transfer**, so the treasury's total holdings for
+    /// `token` are invariant (`Σ categories` is unchanged). Both legs of the
+    /// move are written to the audit trail with before/after balances so the
+    /// reallocation is fully reconstructable by an auditor.
+    ///
+    /// # Authorization
+    /// Requires [`Permission::ManageConfiguration`] (admin/governance), a
+    /// higher bar than the [`Permission::TreasuryOperations`] used for deposits
+    /// and withdrawals, because moving budget between categories is a policy
+    /// decision rather than an operational one.
+    ///
+    /// # Errors
+    /// * [`Error::InvalidArgument`] — non-positive `amount`, or
+    ///   `from_category == to_category` (a no-op that would still emit audit
+    ///   noise).
+    /// * [`Error::Unauthorized`] — caller lacks `ManageConfiguration`.
+    /// * [`Error::InsufficientBalance`] — the source category holds less than
+    ///   `amount`. Checked before any mutation, so a rejected call changes
+    ///   nothing.
+    /// * [`Error::Overflow`] — the destination balance would overflow `i128`.
+    ///
+    /// # Recovery / rollback
+    /// All writes happen after every check passes. Because Soroban reverts
+    /// storage on a failed transaction, a trap in either audit write leaves
+    /// both category balances unchanged — the move is all-or-nothing.
+    ///
+    /// Complexity: O(1) — two balance reads, two balance writes, two audit
+    /// appends; no loops or scans.
+    pub fn reallocate_budget(
+        env: Env,
+        caller: Address,
+        token: Address,
+        from_category: Symbol,
+        to_category: Symbol,
+        amount: i128,
+    ) -> Result<(), Error> {
+        // Cheapest validation first (gas ordering; no auth commit on trivial rejects).
+        if amount <= 0 {
+            return Err(Error::InvalidArgument);
+        }
+        if from_category == to_category {
+            return Err(Error::InvalidArgument);
+        }
+        auth::require_permission(&env, &caller, Permission::ManageConfiguration)?;
+
+        let from_key = (BALANCE, token.clone(), from_category.clone());
+        let to_key = (BALANCE, token.clone(), to_category.clone());
+        let from_balance: i128 = instance_get(&env, &from_key).unwrap_or(0);
+        if from_balance < amount {
+            return Err(Error::InsufficientBalance);
+        }
+        let to_balance: i128 = instance_get(&env, &to_key).unwrap_or(0);
+
+        // from_balance >= amount (checked), so the subtraction cannot underflow.
+        let new_from = from_balance - amount;
+        let new_to = to_balance.checked_add(amount).ok_or(Error::Overflow)?;
+
+        instance_set(&env, &from_key, &new_from);
+        instance_set(&env, &to_key, &new_to);
+
+        // Audit both legs with before/after balances.
+        record_treasury_audit(
+            &env,
+            &caller,
+            TimelineEventType::RecordUpdated,
+            symbol_short!("realloc"),
+            symbol_short!("budgt_out"),
+            Some(token.clone()),
+            Some(from_category.clone()),
+            Some(from_balance),
+            Some(new_from),
+        )?;
+        record_treasury_audit(
+            &env,
+            &caller,
+            TimelineEventType::RecordUpdated,
+            symbol_short!("realloc"),
+            symbol_short!("budgt_in"),
+            Some(token.clone()),
+            Some(to_category.clone()),
+            Some(to_balance),
+            Some(new_to),
+        )?;
+
+        emit_action_executed(
+            &env,
+            &zero_correlation_id(&env),
+            symbol_short!("treasury"),
+            symbol_short!("realloc"),
+            &caller,
+            true,
+            env.ledger().timestamp(),
+        );
+        Ok(())
+    }
+
     /// Allocate category reserves to an approved SEP-41 strategy adapter.
     pub fn allocate_reserve(
         env: Env,
@@ -1296,3 +1397,7 @@ mod budget_test;
 /// `scripts/profile-budget.sh` compares against a checked-in baseline.
 #[cfg(test)]
 mod profile_budget;
+
+/// Category budget reallocation with audit trail (Issue #541).
+#[cfg(test)]
+mod reallocation_test;

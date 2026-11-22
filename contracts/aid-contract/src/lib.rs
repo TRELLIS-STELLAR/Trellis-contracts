@@ -888,6 +888,22 @@ impl AidContract {
         Ok(())
     }
 
+    /// Redeem one verified tranche-locked aid voucher.
+    ///
+    /// This is the voucher-facing name for [`AidContract::claim_aid_milestone`].
+    /// The recipient must authorize the call, the tranche must belong to the
+    /// aid record and be verified, and redemption is rejected after the aid's
+    /// expiry ledger. The existing milestone entry point remains available for
+    /// clients that already use it.
+    pub fn redeem_aid_voucher(
+        env: Env,
+        recipient: Address,
+        aid_id: u64,
+        tranche_index: u32,
+    ) -> Result<(), AidError> {
+        Self::claim_aid_milestone(env, recipient, aid_id, tranche_index)
+    }
+
     /// Refund the unclaimed remainder of an expired milestone aid.
     ///
     /// Only the donor or admin may call. Transfers the sum of all unclaimed
@@ -935,6 +951,20 @@ impl AidContract {
 
         emit(&env, AID_REFUNDED, (aid_id, correlation::load(&env, aid_id)));
         Ok(())
+    }
+
+    /// Claw back every unredeemed tranche of an expired aid voucher program.
+    ///
+    /// This is the voucher-facing name for
+    /// [`AidContract::refund_milestone_aid`]. Only the donor or admin may
+    /// trigger it, and it is strictly unavailable on the expiry ledger itself.
+    /// Already redeemed tranches are never clawed back.
+    pub fn clawback_expired_aid_voucher(
+        env: Env,
+        caller: Address,
+        aid_id: u64,
+    ) -> Result<(), AidError> {
+        Self::refund_milestone_aid(env, caller, aid_id)
     }
 
     /// Grant or revoke the Inspector role for milestone verification.

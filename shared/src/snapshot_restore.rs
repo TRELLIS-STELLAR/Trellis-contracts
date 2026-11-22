@@ -22,9 +22,7 @@
 //! - **Safe Rollback and Quarantine**: Captures pre-restore snapshots to allow atomic rollback
 //!   and automatically quarantines affected projections on critical financial discrepancies.
 
-use soroban_sdk::{
-    contracterror, contracttype, symbol_short, Address, Env, String, Symbol, Vec,
-};
+use soroban_sdk::{contracterror, contracttype, symbol_short, Env, String, Symbol, Vec};
 
 use crate::storage::{instance_get, instance_has, instance_remove, instance_set};
 
@@ -309,7 +307,7 @@ pub fn verify_critical_data_invariants(
                 module,
                 failure_kind: RestoreVerificationFailure::NegativeBalance,
                 target_id: rec.record_id,
-                target_symbol: rec.entity_symbol,
+                target_symbol: rec.entity_symbol.clone(),
                 expected_val: 0,
                 actual_val: rec.amount,
                 severity: RestoreSeverity::Critical,
@@ -336,7 +334,7 @@ pub fn verify_critical_data_invariants(
                     module,
                     failure_kind: RestoreVerificationFailure::DuplicateRecordKey,
                     target_id: rec.record_id,
-                    target_symbol: rec.entity_symbol,
+                    target_symbol: rec.entity_symbol.clone(),
                     expected_val: 1,
                     actual_val: 2,
                     severity: RestoreSeverity::High,
@@ -355,7 +353,9 @@ pub fn verify_critical_data_invariants(
             let mut found_parent = false;
             for k in 0..count {
                 let candidate = records.get(k).unwrap();
-                if candidate.kind == CriticalRecordKind::AidRecord && candidate.record_id == rec.parent_id {
+                if candidate.kind == CriticalRecordKind::AidRecord
+                    && candidate.record_id == rec.parent_id
+                {
                     found_parent = true;
                     break;
                 }
@@ -365,7 +365,7 @@ pub fn verify_critical_data_invariants(
                     module,
                     failure_kind: RestoreVerificationFailure::OrphanedRecord,
                     target_id: rec.record_id,
-                    target_symbol: rec.entity_symbol,
+                    target_symbol: rec.entity_symbol.clone(),
                     expected_val: rec.parent_id as i128,
                     actual_val: 0,
                     severity: RestoreSeverity::High,
@@ -381,7 +381,9 @@ pub fn verify_critical_data_invariants(
             let mut found_upline = false;
             for k in 0..count {
                 let candidate = records.get(k).unwrap();
-                if candidate.kind == CriticalRecordKind::ReferralEdge && candidate.record_id == rec.parent_id {
+                if candidate.kind == CriticalRecordKind::ReferralEdge
+                    && candidate.record_id == rec.parent_id
+                {
                     found_upline = true;
                     break;
                 }
@@ -391,7 +393,7 @@ pub fn verify_critical_data_invariants(
                     module,
                     failure_kind: RestoreVerificationFailure::OrphanedRecord,
                     target_id: rec.record_id,
-                    target_symbol: rec.entity_symbol,
+                    target_symbol: rec.entity_symbol.clone(),
                     expected_val: rec.parent_id as i128,
                     actual_val: 0,
                     severity: RestoreSeverity::High,
@@ -407,7 +409,9 @@ pub fn verify_critical_data_invariants(
             let mut found_prop = false;
             for k in 0..count {
                 let candidate = records.get(k).unwrap();
-                if candidate.kind == CriticalRecordKind::GovernanceProposal && candidate.record_id == rec.parent_id {
+                if candidate.kind == CriticalRecordKind::GovernanceProposal
+                    && candidate.record_id == rec.parent_id
+                {
                     found_prop = true;
                     break;
                 }
@@ -417,7 +421,7 @@ pub fn verify_critical_data_invariants(
                     module,
                     failure_kind: RestoreVerificationFailure::OrphanedRecord,
                     target_id: rec.record_id,
-                    target_symbol: rec.entity_symbol,
+                    target_symbol: rec.entity_symbol.clone(),
                     expected_val: rec.parent_id as i128,
                     actual_val: 0,
                     severity: RestoreSeverity::High,
@@ -433,7 +437,9 @@ pub fn verify_critical_data_invariants(
             let mut found_listing = false;
             for k in 0..count {
                 let candidate = records.get(k).unwrap();
-                if candidate.kind == CriticalRecordKind::MarketplaceListing && candidate.record_id == rec.parent_id {
+                if candidate.kind == CriticalRecordKind::MarketplaceListing
+                    && candidate.record_id == rec.parent_id
+                {
                     found_listing = true;
                     break;
                 }
@@ -443,7 +449,7 @@ pub fn verify_critical_data_invariants(
                     module,
                     failure_kind: RestoreVerificationFailure::OrphanedRecord,
                     target_id: rec.record_id,
-                    target_symbol: rec.entity_symbol,
+                    target_symbol: rec.entity_symbol.clone(),
                     expected_val: rec.parent_id as i128,
                     actual_val: 0,
                     severity: RestoreSeverity::High,
@@ -462,7 +468,7 @@ pub fn verify_critical_data_invariants(
                 module,
                 failure_kind: RestoreVerificationFailure::BoundaryExceeded,
                 target_id: rec.record_id,
-                target_symbol: rec.entity_symbol,
+                target_symbol: rec.entity_symbol.clone(),
                 expected_val: 10_000,
                 actual_val: rec.auxiliary_value as i128,
                 severity: RestoreSeverity::High,
@@ -477,7 +483,7 @@ pub fn verify_critical_data_invariants(
                 module,
                 failure_kind: RestoreVerificationFailure::QuorumViolation,
                 target_id: rec.record_id,
-                target_symbol: rec.entity_symbol,
+                target_symbol: rec.entity_symbol.clone(),
                 expected_val: 1,
                 actual_val: 0,
                 severity: RestoreSeverity::High,
@@ -501,7 +507,7 @@ pub fn verify_critical_data_invariants(
                     module,
                     failure_kind: RestoreVerificationFailure::LifecycleInconsistency,
                     target_id: rec.record_id,
-                    target_symbol: rec.entity_symbol,
+                    target_symbol: rec.entity_symbol.clone(),
                     expected_val: 0,
                     actual_val: 0,
                     severity: RestoreSeverity::High,
@@ -516,8 +522,11 @@ pub fn verify_critical_data_invariants(
     }
 
     // 6. Solvency Invariant Check (Reserve >= Liabilities)
-    if module == RestoreModule::Treasury && total_liabilities > 0 && total_reserve < total_liabilities {
-        let deficit = total_liabilities.saturating_sub(total_reserve);
+    if module == RestoreModule::Treasury
+        && total_liabilities > 0
+        && total_reserve < total_liabilities
+    {
+        let _deficit = total_liabilities.saturating_sub(total_reserve);
         mismatches.push_back(RestoreMismatchReport {
             module,
             failure_kind: RestoreVerificationFailure::SolvencyDeficit,
@@ -564,7 +573,7 @@ pub fn rebuild_derived_views(
                         view_name: symbol_short!("strat_idx"),
                         kind: DerivedViewKind::Index,
                         key_id: rec.record_id,
-                        key_symbol: rec.entity_symbol,
+                        key_symbol: rec.entity_symbol.clone(),
                         numeric_value: rec.amount,
                         is_active: rec.status == symbol_short!("active"),
                     });
@@ -581,7 +590,7 @@ pub fn rebuild_derived_views(
                         }
                     }
                     if !found {
-                        category_totals.push_back((rec.entity_symbol, rec.amount));
+                        category_totals.push_back((rec.entity_symbol.clone(), rec.amount));
                     }
                 }
             }
@@ -612,7 +621,7 @@ pub fn rebuild_derived_views(
                             view_name: symbol_short!("search"),
                             kind: DerivedViewKind::Index,
                             key_id: rec.record_id,
-                            key_symbol: rec.entity_symbol,
+                            key_symbol: rec.entity_symbol.clone(),
                             numeric_value: rec.amount,
                             is_active: true,
                         });
@@ -623,7 +632,7 @@ pub fn rebuild_derived_views(
                         view_name: symbol_short!("donor_aid"),
                         kind: DerivedViewKind::Index,
                         key_id: rec.record_id,
-                        key_symbol: rec.entity_symbol, // Donor address symbol
+                        key_symbol: rec.entity_symbol.clone(), // Donor address symbol
                         numeric_value: rec.amount,
                         is_active: true,
                     });
@@ -641,7 +650,7 @@ pub fn rebuild_derived_views(
                         view_name: symbol_short!("downline"),
                         kind: DerivedViewKind::Index,
                         key_id: rec.record_id,
-                        key_symbol: rec.entity_symbol,
+                        key_symbol: rec.entity_symbol.clone(),
                         numeric_value: rec.auxiliary_value as i128, // bps rate
                         is_active: true,
                     });
@@ -651,7 +660,7 @@ pub fn rebuild_derived_views(
                         view_name: symbol_short!("comm_acc"),
                         kind: DerivedViewKind::Cache,
                         key_id: rec.record_id,
-                        key_symbol: rec.entity_symbol,
+                        key_symbol: rec.entity_symbol.clone(),
                         numeric_value: rec.amount,
                         is_active: true,
                     });
@@ -674,7 +683,7 @@ pub fn rebuild_derived_views(
                             view_name: symbol_short!("act_prop"),
                             kind: DerivedViewKind::Index,
                             key_id: rec.record_id,
-                            key_symbol: rec.entity_symbol,
+                            key_symbol: rec.entity_symbol.clone(),
                             numeric_value: rec.amount,
                             is_active: true,
                         });
@@ -718,7 +727,7 @@ pub fn rebuild_derived_views(
                         view_name: symbol_short!("feed_reg"),
                         kind: DerivedViewKind::Index,
                         key_id: rec.record_id,
-                        key_symbol: rec.entity_symbol,
+                        key_symbol: rec.entity_symbol.clone(),
                         numeric_value: rec.amount,
                         is_active: rec.status == symbol_short!("active"),
                     });
@@ -728,7 +737,7 @@ pub fn rebuild_derived_views(
                         view_name: symbol_short!("price_rnd"),
                         kind: DerivedViewKind::Cache,
                         key_id: rec.record_id,
-                        key_symbol: rec.entity_symbol,
+                        key_symbol: rec.entity_symbol.clone(),
                         numeric_value: rec.amount,
                         is_active: true,
                     });
@@ -755,7 +764,7 @@ pub fn rebuild_derived_views(
                             view_name: symbol_short!("listing"),
                             kind: DerivedViewKind::Index,
                             key_id: rec.record_id,
-                            key_symbol: rec.entity_symbol,
+                            key_symbol: rec.entity_symbol.clone(),
                             numeric_value: rec.amount,
                             is_active: true,
                         });
@@ -812,7 +821,7 @@ pub fn reconcile_derived_views(
                         module,
                         failure_kind: RestoreVerificationFailure::DerivedViewDrift,
                         target_id: expected.key_id,
-                        target_symbol: expected.view_name,
+                        target_symbol: expected.view_name.clone(),
                         expected_val: expected.numeric_value,
                         actual_val: actual.numeric_value,
                         severity: RestoreSeverity::Medium,
@@ -832,7 +841,7 @@ pub fn reconcile_derived_views(
                 module,
                 failure_kind: RestoreVerificationFailure::DerivedViewDrift,
                 target_id: expected.key_id,
-                target_symbol: expected.view_name,
+                target_symbol: expected.view_name.clone(),
                 expected_val: 1,
                 actual_val: 0,
                 severity: RestoreSeverity::Medium,
@@ -928,7 +937,8 @@ pub fn execute_restore_verification_and_rebuild(
     let rebuilt_views = rebuild_derived_views(env, module, canonical_records);
 
     // 3. Reconcile Derived Views with Existing State
-    let drift_mismatches = reconcile_derived_views(env, module, &rebuilt_views, existing_derived_views);
+    let drift_mismatches =
+        reconcile_derived_views(env, module, &rebuilt_views, existing_derived_views);
     for d in 0..drift_mismatches.len() {
         mismatches.push_back(drift_mismatches.get(d).unwrap());
     }
@@ -984,14 +994,18 @@ pub fn execute_restore_verification_and_rebuild(
             created_at: env.ledger().timestamp(),
             applied: false,
         };
-        instance_set(env, &RestoreStorageKey::RollbackSnapshot(receipt_id), &rollback);
+        instance_set(
+            env,
+            &RestoreStorageKey::RollbackSnapshot(receipt_id),
+            &rollback,
+        );
 
         // Persist rebuilt views
         for v in 0..rebuilt_views.len() {
             let view = rebuilt_views.get(v).unwrap();
             instance_set(
                 env,
-                &RestoreStorageKey::StoredDerivedView(module, view.view_name, view.key_id),
+                &RestoreStorageKey::StoredDerivedView(module, view.view_name.clone(), view.key_id),
                 &view,
             );
         }
@@ -1052,7 +1066,11 @@ pub fn rollback_restore(
         let view = snapshot.original_derived_views.get(i).unwrap();
         instance_set(
             env,
-            &RestoreStorageKey::StoredDerivedView(snapshot.module, view.view_name, view.key_id),
+            &RestoreStorageKey::StoredDerivedView(
+                snapshot.module,
+                view.view_name.clone(),
+                view.key_id,
+            ),
             &view,
         );
     }
@@ -1071,7 +1089,11 @@ pub fn rollback_restore(
     receipt.passed = false;
     receipt.quarantined = false;
     instance_set(env, &receipt_key, &receipt);
-    instance_set(env, &RestoreStorageKey::LatestReceipt(snapshot.module), &receipt);
+    instance_set(
+        env,
+        &RestoreStorageKey::LatestReceipt(snapshot.module),
+        &receipt,
+    );
 
     env.events().publish(
         (symbol_short!("snap_rst"), symbol_short!("rollback")),

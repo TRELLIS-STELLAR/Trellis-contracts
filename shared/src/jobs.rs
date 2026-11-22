@@ -78,6 +78,8 @@ pub enum JobError {
     QueueFull = 8,
     /// Queue capacity must be between 1 and MAX_QUEUE_CAPACITY.
     InvalidCapacity = 9,
+    /// The job was cancelled and will not run.
+    Cancelled = 10,
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +139,27 @@ pub enum JobStatus {
     DeadLettered,
     /// Finished successfully.
     Succeeded,
+    /// Stopped by an admin before it finished; never attempted again.
+    /// Appended last so stored discriminants of existing jobs are unchanged.
+    Cancelled,
+}
+
+/// Why and by whom a job was cancelled (Issue #444).
+///
+/// Stored beside the job rather than on it, so the `Job` XDR layout of jobs
+/// written before cancellation existed is unchanged.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancellationRecord {
+    pub job_id: u64,
+    /// Status the job had when it was cancelled (`Pending` or `DeadLettered`).
+    pub previous_status: JobStatus,
+    /// Failed attempts made before cancellation.
+    pub attempts: u32,
+    /// Caller-supplied, low-cardinality reason code (0 = unspecified).
+    pub reason: u32,
+    pub cancelled_by: Address,
+    pub cancelled_ledger: u32,
 }
 
 #[contracttype]
@@ -433,6 +456,8 @@ pub enum WorkerKey {
     Receipt(BytesN<32>),
     /// `u64` id currently holding a dedupe key.
     Dedupe(BytesN<32>),
+    /// `CancellationRecord` for a cancelled job.
+    Cancellation(u64),
 }
 
 /// Topic prefix for every job event.
@@ -447,6 +472,8 @@ pub const JOB_SUCCEEDED: Symbol = symbol_short!("succeeded");
 pub const JOB_DEAD_LETTERED: Symbol = symbol_short!("deadltr");
 /// A dead letter was put back on the queue.
 pub const JOB_REQUEUED: Symbol = symbol_short!("requeued");
+/// A job was cancelled and removed from the queue.
+pub const JOB_CANCELLED: Symbol = symbol_short!("cancelled");
 
 /// Topics: `("job", event, job_id)`; data: `Job`.
 fn publish_job_event(env: &Env, event: Symbol, job: &Job) {
@@ -699,6 +726,9 @@ fn attempt_job<H: JobHandler>(
     if job.status == JobStatus::DeadLettered {
         return Err(JobError::NotRetryable);
     }
+    if job.status == JobStatus::Cancelled {
+        return Err(JobError::Cancelled);
+    }
     if job.next_attempt_ledger > now {
         return Ok(RunOutcome::Skipped(job));
     }
@@ -805,6 +835,63 @@ pub fn discard_dead_letter(
     }
     index_remove(env, &WorkerKey::DeadLetters, job_id);
     Ok(job)
+}
+
+/// Cancel a pending or dead-lettered job and clean up its queue state.
+/// Admin only (Issue #444).
+///
+/// Cleanup is all-or-nothing within the call:
+/// - the job leaves the pending and dead-letter indexes, so it no longer
+///   counts against queue capacity and `run_due_job` never picks it again;
+/// - its dedupe key is released, so the same logical work can be enqueued
+///   afresh after the cancellation;
+/// - the job record stays (status `Cancelled`) and a [`CancellationRecord`]
+///   is written for audit.
+///
+/// Soroban runs one invocation at a time, so a handler is never interrupted
+/// mid-attempt: cancellation takes effect between attempts, and a job whose
+/// attempt already succeeded returns `AlreadyCompleted` instead.
+///
+/// Cancelling an already-cancelled job is a no-op that returns the job, so a
+/// retried cancel request is safe.
+pub fn cancel_job(
+    env: &Env,
+    caller: &Address,
+    job_id: u64,
+    reason: u32,
+) -> Result<Job, JobError> {
+    require_admin(env, caller).map_err(|_| JobError::Unauthorized)?;
+    let mut job = load_job(env, job_id).ok_or(JobError::NotFound)?;
+    match job.status {
+        JobStatus::Succeeded => return Err(JobError::AlreadyCompleted),
+        JobStatus::Cancelled => return Ok(job),
+        JobStatus::Pending | JobStatus::DeadLettered => {}
+    }
+
+    let record = CancellationRecord {
+        job_id,
+        previous_status: job.status,
+        attempts: job.attempts,
+        reason,
+        cancelled_by: caller.clone(),
+        cancelled_ledger: env.ledger().sequence(),
+    };
+
+    job.status = JobStatus::Cancelled;
+    save_job(env, &job);
+    index_remove(env, &WorkerKey::Pending, job_id);
+    index_remove(env, &WorkerKey::DeadLetters, job_id);
+    if load_dedupe_owner(env, &job.dedupe_key) == Some(job_id) {
+        persistent_remove(env, &WorkerKey::Dedupe(job.dedupe_key.clone()));
+    }
+    persistent_set(env, &WorkerKey::Cancellation(job_id), &record);
+    publish_job_event(env, JOB_CANCELLED, &job);
+    Ok(job)
+}
+
+/// Read the cancellation record of a cancelled job.
+pub fn get_cancellation(env: &Env, job_id: u64) -> Option<CancellationRecord> {
+    persistent_get(env, &WorkerKey::Cancellation(job_id))
 }
 
 // ---------------------------------------------------------------------------

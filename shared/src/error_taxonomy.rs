@@ -24,6 +24,9 @@ pub enum ErrorDomain {
     Export,
     SupportAccess,
     Jobs,
+    /// `shared::feature_flags::FeatureFlagError` (960–968). Appended last so
+    /// existing variants keep their encoding (#289).
+    FeatureFlags,
 }
 
 /// Broad class used by clients to choose safe recovery behavior.
@@ -1299,6 +1302,74 @@ fn domain_definition(domain: &ErrorDomain, code: u32) -> Option<Definition> {
             ),
             _ => return None,
         }),
+        // Issue #289: FeatureFlagError shares the 960s with support access and
+        // backfill errors; this domain gives its codes their own stable meaning.
+        ErrorDomain::FeatureFlags => Some(match code {
+            960 => definition(
+                "FEATURE_ROLLOUT_INVALID",
+                ErrorCategory::Validation,
+                false,
+                "The rollout percentage is out of range.",
+                Some("Use a rollout weight between 0 and 10000 basis points."),
+            ),
+            961 => definition(
+                "FEATURE_DISABLED",
+                ErrorCategory::Configuration,
+                false,
+                "This feature is not enabled.",
+                Some("Use the existing flow; the feature is off or not rolled out yet."),
+            ),
+            962 => definition(
+                "FEATURE_GUARD_BLOCKED",
+                ErrorCategory::Configuration,
+                true,
+                "This feature is temporarily unavailable.",
+                Some("Use the existing flow and retry after the rollout guard reports healthy."),
+            ),
+            963 => definition(
+                "FEATURE_ROLLED_BACK",
+                ErrorCategory::Configuration,
+                false,
+                "This feature was rolled back after failures.",
+                Some("Use the existing flow. Operators: run verify_rollback before re-arming."),
+            ),
+            964 => definition(
+                "ROLLBACK_VERIFICATION_FAILED",
+                ErrorCategory::Internal,
+                false,
+                "The feature rollback could not be confirmed as clean.",
+                Some("Keep the feature disabled, repair the reported anomaly, then verify again."),
+            ),
+            965 => definition(
+                "ROLLBACK_STATE_INCONSISTENT",
+                ErrorCategory::Internal,
+                false,
+                "Inconsistent state was found after a feature rollback.",
+                Some("Keep the feature disabled and reconcile the affected records before verifying again."),
+            ),
+            966 => definition(
+                "FEATURE_ALREADY_ROLLED_BACK",
+                ErrorCategory::Conflict,
+                false,
+                "This feature is in a rolled-back state.",
+                Some("Re-enable it only through rearm_after_verified_rollback after a clean verification."),
+            ),
+            967 => definition(
+                "ROLLOUT_GUARD_CONFIG_INVALID",
+                ErrorCategory::Validation,
+                false,
+                "The rollout guard settings are invalid.",
+                Some("Set max_consecutive_failures above zero and max_error_rate_bps to at most 10000."),
+            ),
+            968 => definition(
+                "ROLLBACK_NOT_VERIFIED",
+                ErrorCategory::Conflict,
+                false,
+                "This feature cannot be re-enabled until its rollback is verified.",
+                Some("Run verify_rollback with a clean consistency snapshot, then rearm the feature."),
+            ),
+            _ => return None,
+        }),
         _ => None,
     }
 }
@@ -1567,6 +1638,7 @@ mod tests {
             (ErrorDomain::Export, 920, 934),
             (ErrorDomain::Marketplace, 2000, 2023),
             (ErrorDomain::SupportAccess, 960, 973),
+            (ErrorDomain::FeatureFlags, 960, 968),
         ];
 
         for (domain, first, last) in ranges {
@@ -1626,6 +1698,7 @@ mod tests {
             (ErrorDomain::Jobs, 1, 9),
             (ErrorDomain::Marketplace, 2000, 2023),
             (ErrorDomain::SupportAccess, 960, 973),
+            (ErrorDomain::FeatureFlags, 960, 968),
         ];
 
         for (domain, first, last) in ranges {
@@ -1699,5 +1772,63 @@ mod tests {
         let reg_err = describe_error(&env, ErrorDomain::Registry, 1101, correlation_id(&env));
         assert_eq!(reg_err.code, String::from_str(&env, "CONTRACT_NOT_FOUND"));
         assert_eq!(reg_err.category, ErrorCategory::NotFound);
+    }
+
+    // Issue #289: feature-flag errors get stable, domain-specific codes.
+    #[test]
+    fn feature_flag_errors_have_stable_codes_and_remediation() {
+        use crate::feature_flags::FeatureFlagError as F;
+
+        let env = Env::default();
+        let expected = [
+            (F::InvalidRollout, "FEATURE_ROLLOUT_INVALID", ErrorCategory::Validation, false),
+            (F::Disabled, "FEATURE_DISABLED", ErrorCategory::Configuration, false),
+            (F::GuardBlocked, "FEATURE_GUARD_BLOCKED", ErrorCategory::Configuration, true),
+            (F::AutomaticRollbackTriggered, "FEATURE_ROLLED_BACK", ErrorCategory::Configuration, false),
+            (F::RollbackVerificationFailed, "ROLLBACK_VERIFICATION_FAILED", ErrorCategory::Internal, false),
+            (F::InconsistentStateDetected, "ROLLBACK_STATE_INCONSISTENT", ErrorCategory::Internal, false),
+            (F::AlreadyRolledBack, "FEATURE_ALREADY_ROLLED_BACK", ErrorCategory::Conflict, false),
+            (F::InvalidGuardConfig, "ROLLOUT_GUARD_CONFIG_INVALID", ErrorCategory::Validation, false),
+            (
+                F::UnverifiedRollbackReenableForbidden,
+                "ROLLBACK_NOT_VERIFIED",
+                ErrorCategory::Conflict,
+                false,
+            ),
+        ];
+
+        for (error, code, category, retryable) in expected {
+            let raw = error as u32;
+            let info = describe_error(&env, ErrorDomain::FeatureFlags, raw, correlation_id(&env));
+            assert_eq!(info.code, String::from_str(&env, code), "{error:?}");
+            assert_eq!(stable_code(ErrorDomain::FeatureFlags, raw), code);
+            assert_eq!(info.category, category, "{error:?}");
+            assert_eq!(info.retryable, retryable, "{error:?}");
+            assert!(info.recovery.is_some(), "{error:?} needs a remediation hint");
+        }
+    }
+
+    #[test]
+    fn feature_flag_codes_do_not_inherit_support_access_meanings() {
+        let env = Env::default();
+        // 961 is FeatureFlagError::Disabled and ImpersonationError's
+        // unauthorized code; the domain decides which one applies.
+        let flag = describe_error(&env, ErrorDomain::FeatureFlags, 961, correlation_id(&env));
+        let support = describe_error(&env, ErrorDomain::SupportAccess, 961, correlation_id(&env));
+        assert_eq!(flag.code, String::from_str(&env, "FEATURE_DISABLED"));
+        assert_eq!(support.code, String::from_str(&env, "SUPPORT_ACCESS_UNAUTHORIZED"));
+        assert_ne!(flag.category, support.category);
+
+        // Unassigned codes in the flag range still fall back safely.
+        assert_eq!(stable_code(ErrorDomain::FeatureFlags, 969), UNEXPECTED_ERROR_CODE);
+    }
+
+    #[test]
+    fn rollout_guard_rejections_are_never_retryable_except_guard_blocked() {
+        let env = Env::default();
+        for raw in 960..=968u32 {
+            let info = describe_error(&env, ErrorDomain::FeatureFlags, raw, correlation_id(&env));
+            assert_eq!(info.retryable, raw == 962, "code {raw}");
+        }
     }
 }

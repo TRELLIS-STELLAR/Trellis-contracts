@@ -448,7 +448,7 @@ pub fn validate_session(
 
 /// Checks if an action is permitted within the session scope.
 pub fn check_action_permission(
-    _env: &Env,
+    env: &Env,
     session: &ImpersonationSession,
     action_type: ImpersonationAction,
     resource_type: ResourceType,
@@ -588,10 +588,7 @@ pub fn get_current_impersonation(env: &Env, target_user: &Address) -> Option<Imp
 /// Returns only the expiry timestamp for user-safe support-access notices.
 ///
 /// The result intentionally omits the maintainer identity, reason, and scope.
-pub fn support_access_notice(
-    env: &Env,
-    target_user: &Address,
-) -> Option<SupportAccessNotice> {
+pub fn support_access_notice(env: &Env, target_user: &Address) -> Option<SupportAccessNotice> {
     let now = env.ledger().timestamp();
     for session_id in get_target_sessions(env, target_user).iter() {
         if let Some(session) = get_session(env, session_id) {
@@ -693,10 +690,7 @@ fn is_eligible_target(env: &Env, target_user: &Address) -> bool {
     true
 }
 
-fn is_valid_scope(
-    scope: &ImpersonationScope,
-    resource_scopes: &Vec<ResourceScope>,
-) -> bool {
+fn is_valid_scope(scope: &ImpersonationScope, resource_scopes: &Vec<ResourceScope>) -> bool {
     if resource_scopes.is_empty() {
         return false;
     }
@@ -859,10 +853,7 @@ fn append_support_audit(
     .map_err(|_| ImpersonationError::AuditFailure)
 }
 
-fn expire_session(
-    env: &Env,
-    mut session: ImpersonationSession,
-) -> Result<(), ImpersonationError> {
+fn expire_session(env: &Env, mut session: ImpersonationSession) -> Result<(), ImpersonationError> {
     append_support_audit(
         env,
         &session.impersonator,
@@ -1357,12 +1348,7 @@ mod tests {
         assert_eq!(all_resources, Err(ImpersonationError::InvalidScope));
 
         let privileged_target = Address::generate(&env);
-        let _ = crate::auth::grant_role(
-            &env,
-            &admin,
-            &privileged_target,
-            Role::TreasuryManager,
-        );
+        let _ = crate::auth::grant_role(&env, &admin, &privileged_target, Role::TreasuryManager);
         let privileged_session = create_session(
             &env,
             &support,
@@ -1405,12 +1391,7 @@ mod tests {
             },
         )
         .unwrap();
-        let _ = crate::auth::grant_role(
-            &env,
-            &admin,
-            &target_user,
-            Role::TreasuryManager,
-        );
+        let _ = crate::auth::grant_role(&env, &admin, &target_user, Role::TreasuryManager);
 
         assert_eq!(
             validate_session(&env, created.session.session_id),

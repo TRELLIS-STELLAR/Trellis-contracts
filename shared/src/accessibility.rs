@@ -105,6 +105,13 @@ impl AsyncStatusState {
                 | AsyncStatusState::Idle
         )
     }
+    pub fn require_transition(&self, next: AsyncStatusState) -> Result<(), AccessibilityError> {
+        use AsyncStatusState::*;
+        if matches!((*self, next), (Idle, Validating) | (Validating, AwaitingSignature | RecoverableError | FatalError)
+            | (AwaitingSignature, Broadcasting | RecoverableError | FatalError) | (Broadcasting, Succeeded | RecoverableError | FatalError)
+            | (RecoverableError, Validating | Idle) | (Succeeded | FatalError, Idle)) { return Ok(()); }
+        Err(AccessibilityError::InvalidStateTransition)
+    }
 }
 
 /// ARIA live region announcement priority mode.

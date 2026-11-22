@@ -45,8 +45,8 @@ use crate::storage::{
 };
 
 // ----------------------------------------------------------------------------
-	// Constants
-	// ----------------------------------------------------------------------------
+// Constants
+// ----------------------------------------------------------------------------
 
 /// Default maximum number of rows in a single import batch.
 pub const DEFAULT_MAX_IMPORT_SIZE: u32 = 50;
@@ -73,7 +73,7 @@ const LAST_BATCH_KEY: Symbol = symbol_short!("imp_last");
 const LAST_BATCH_COUNT_KEY: Symbol = symbol_short!("imp_lcnt");
 
 /// Persistent cooperative-cancellation marker for an import fingerprint.
-const IMPORT_CANCEL_KEY: Symbol = symbol_short!("imp_cancel");
+const IMPORT_CANCEL_KEY: Symbol = symbol_short!("imp_cncl");
 
 // ----------------------------------------------------------------------------
 // Error Codes (Range 940–949)
@@ -336,7 +336,10 @@ fn validate_item(_env: &Env, item: &ImportItem, current_time: u64) -> Result<(),
     }
     if let Some(ext_id) = &item.external_id {
         if ext_id.is_empty() || ext_id.len() > MAX_EXTERNAL_ID_LEN {
-            return Err((ImportError::ExternalIdTooLong as u32, symbol_short!("bad_id")));
+            return Err((
+                ImportError::ExternalIdTooLong as u32,
+                symbol_short!("bad_id"),
+            ));
         }
     }
     Ok(())
@@ -745,7 +748,11 @@ pub fn execute_import(
 /// phase. The marker is keyed by the deterministic batch fingerprint, so a
 /// retry of the same batch observes the same decision and cannot partially
 /// apply after an operator has stopped it.
-pub fn cancel_import(env: &Env, caller: &Address, fingerprint: &BytesN<32>) -> Result<(), ImportError> {
+pub fn cancel_import(
+    env: &Env,
+    caller: &Address,
+    fingerprint: &BytesN<32>,
+) -> Result<(), ImportError> {
     caller.require_auth();
     instance_set(env, &(IMPORT_CANCEL_KEY, fingerprint.clone()), &true);
     Ok(())

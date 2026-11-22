@@ -152,6 +152,7 @@ enum DataKey {
 
 pub const MAX_CAPABILITY_LIFETIME: u64 = 7 * 24 * 60 * 60;
 pub const MAX_CAPABILITY_USES: u32 = 100;
+pub const MAX_PERMISSION_DIFF_ENTRIES: u32 = 50;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -232,6 +233,23 @@ const EV_RESUMED: Symbol = symbol_short!("ac_rz");
 const EV_OWNERSHIP_TRANSFER_PROPOSED: Symbol = symbol_short!("ac_op");
 const EV_OWNERSHIP_TRANSFER_ACCEPTED: Symbol = symbol_short!("ac_oa");
 const EV_OWNERSHIP_TRANSFER_CANCELLED: Symbol = symbol_short!("ac_oc");
+const EV_PERMISSION_DIFF: Symbol = symbol_short!("ac_pd");
+
+/// A single entry in a permission-diff report describing how a proposed
+/// role or policy change would alter effective access for one principal.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PermissionDiffEntry {
+    pub principal: Address,
+    pub role: Symbol,
+    /// `true` when the change would grant the role, `false` when it removes it.
+    pub grants: bool,
+    /// `true` when the principal already holds the role in effect right now.
+    pub currently_held: bool,
+    /// `true` when applying the change would actually alter the principal's
+    /// effective access (i.e. the change is not a no-op).
+    pub effective_change: bool,
+}
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -288,6 +306,60 @@ impl AccessControlContract {
         env.events()
             .publish((EV_ROLE_CREATED,), (symbol_short!("super"), super_admin));
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Permission-diff preview
+    // -----------------------------------------------------------------------
+
+    /// Build a read-only permission-diff report describing how a proposed set
+    /// of role grants/revocations would change effective access, without
+    /// mutating any state.  Intended to be called before `grant_role` /
+    /// `revoke_role` / policy changes so operators can review the impact.
+    ///
+    /// Each `(principal, role, grants)` tuple yields one entry.  Entries are
+    /// returned in input order.  Validation failures (unknown role, empty
+    /// change set, oversized change set) are reported as errors and produce no
+    /// partial report.
+    ///
+    /// # Authorization
+    /// Requires the `ManageMaintainers` action permission so the report itself
+    /// cannot be used to probe role membership by unauthorized parties.
+    pub fn preview_permission_diff(
+        env: Env,
+        caller: Address,
+        changes: Vec<(Address, Symbol, bool)>,
+    ) -> Result<Vec<PermissionDiffEntry>, AccessControlError> {
+        require_action(&env, &caller, &Action::ManageMaintainers)?;
+        if changes.is_empty() {
+            return Err(AccessControlError::InvalidRole);
+        }
+        if changes.len() > MAX_PERMISSION_DIFF_ENTRIES {
+            return Err(AccessControlError::InvalidRole);
+        }
+        let now = env.ledger().timestamp();
+        let mut report: Vec<PermissionDiffEntry> = Vec::new(&env);
+        for (principal, role, grants) in changes.iter() {
+            if !is_role_registered(&env, &role) {
+                return Err(AccessControlError::RoleNotFound);
+            }
+            let currently_held = Self::has_role(env.clone(), role.clone(), principal.clone());
+            // A grant is a no-op when already held; a revoke is a no-op when not held.
+            let effective_change = if grants { !currently_held } else { currently_held };
+            let _ = now;
+            report.push_back(PermissionDiffEntry {
+                principal,
+                role,
+                grants,
+                currently_held,
+                effective_change,
+            });
+        }
+        env.events().publish(
+            (EV_PERMISSION_DIFF,),
+            (caller, report.len()),
+        );
+        Ok(report)
     }
 
     // -----------------------------------------------------------------------
@@ -1030,7 +1102,11 @@ impl AccessControlContract {
     }
 
     /// Consume one use of a capability after checking caller, action, expiry,
-    /// revocation, and the remaining use budget.
+    /// revocation, the issuer's admin status, and the remaining use budget.
+    ///
+    /// A capability whose issuer is no longer an admin fails with
+    /// [`AccessControlError::CapabilityRevoked`]: a grant never outlives the
+    /// authority that issued it.
     pub fn consume_capability(
         env: Env,
         caller: Address,
@@ -1042,6 +1118,9 @@ impl AccessControlContract {
         let mut token = env.storage().instance().get::<DataKey, CapabilityToken>(&key)
             .ok_or(AccessControlError::CapabilityNotFound)?;
         if token.revoked { return Err(AccessControlError::CapabilityRevoked); }
+        if !Self::is_admin(env.clone(), token.issuer.clone()) {
+            return Err(AccessControlError::CapabilityRevoked);
+        }
         if token.grantee != caller { return Err(AccessControlError::CapabilityUnauthorized); }
         if token.action != action { return Err(AccessControlError::CapabilityActionMismatch); }
         if env.ledger().timestamp() >= token.expires_at { return Err(AccessControlError::CapabilityExpired); }
@@ -2687,6 +2766,106 @@ mod tests {
         assert_eq!(client.try_consume_capability(&grantee, &id, &symbol_short!("transfer")), Err(Ok(AccessControlError::CapabilityActionMismatch)));
         client.revoke_capability(&super_admin, &id);
         assert_eq!(client.try_consume_capability(&grantee, &id, &symbol_short!("pause")), Err(Ok(AccessControlError::CapabilityRevoked)));
+    }
+
+    // -----------------------------------------------------------------------
+    // Expiring capability grants for sensitive actions (Issue #479)
+    // -----------------------------------------------------------------------
+
+    fn uses_of(client: &AccessControlContractClient, id: u64) -> u32 {
+        client.get_capability(&id).unwrap().uses
+    }
+
+    #[test]
+    fn capability_pauses_a_scope_once_without_a_standing_role() {
+        let (env, super_admin, contract_id) = setup();
+        let client = client_for(&env, &contract_id);
+        let operator = Address::generate(&env);
+        let id =
+            client.issue_capability(&super_admin, &operator, &symbol_short!("pause"), &100, &1);
+
+        assert!(!client.is_admin(&operator));
+        client.pause_with_capability(&operator, &PAUSE_SCOPE_ROLES, &id);
+        assert!(client.is_paused(&PAUSE_SCOPE_ROLES));
+        assert_eq!(uses_of(&client, id), 1);
+    }
+
+    #[test]
+    fn capability_expires_exactly_at_expires_at_and_rejects_other_callers() {
+        let (env, super_admin, contract_id) = setup();
+        let client = client_for(&env, &contract_id);
+        let grantee = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let action = symbol_short!("pause");
+        env.ledger().set_timestamp(1_000);
+        let id = client.issue_capability(&super_admin, &grantee, &action, &100, &2);
+
+        assert_eq!(
+            client.try_consume_capability(&stranger, &id, &action),
+            Err(Ok(AccessControlError::CapabilityUnauthorized))
+        );
+        env.ledger().set_timestamp(1_099);
+        client.consume_capability(&grantee, &id, &action);
+        env.ledger().set_timestamp(1_100);
+        assert_eq!(
+            client.try_consume_capability(&grantee, &id, &action),
+            Err(Ok(AccessControlError::CapabilityExpired))
+        );
+        assert_eq!(uses_of(&client, id), 1);
+    }
+
+    #[test]
+    fn failed_capability_action_rolls_back_the_use_so_it_can_be_retried() {
+        let (env, super_admin, contract_id) = setup();
+        let client = client_for(&env, &contract_id);
+        let operator = Address::generate(&env);
+        let id =
+            client.issue_capability(&super_admin, &operator, &symbol_short!("pause"), &100, &1);
+
+        // Rejected before the capability is touched.
+        assert_eq!(
+            client.try_pause_with_capability(&operator, &symbol_short!("bogus"), &id),
+            Err(Ok(AccessControlError::InvalidPauseScope))
+        );
+        // Consumed, then the pause itself fails: the whole call rolls back.
+        client.pause(&super_admin, &PAUSE_SCOPE_ROLES);
+        assert_eq!(
+            client.try_pause_with_capability(&operator, &PAUSE_SCOPE_ROLES, &id),
+            Err(Ok(AccessControlError::OperationPaused))
+        );
+        assert_eq!(uses_of(&client, id), 0);
+
+        client.resume(&super_admin, &PAUSE_SCOPE_ROLES);
+        client.pause_with_capability(&operator, &PAUSE_SCOPE_ROLES, &id);
+        assert_eq!(uses_of(&client, id), 1);
+    }
+
+    #[test]
+    fn capability_dies_with_its_issuers_admin_role() {
+        let (env, super_admin, contract_id) = setup();
+        let client = client_for(&env, &contract_id);
+        let issuer = Address::generate(&env);
+        let operator = Address::generate(&env);
+        let action = symbol_short!("pause");
+        client.add_admin(&super_admin, &issuer);
+        let id = client.issue_capability(&issuer, &operator, &action, &100, &5);
+        client.consume_capability(&operator, &id, &action);
+
+        client.remove_admin(&super_admin, &issuer);
+        assert_eq!(
+            client.try_consume_capability(&operator, &id, &action),
+            Err(Ok(AccessControlError::CapabilityRevoked))
+        );
+        assert_eq!(
+            client.try_pause_with_capability(&operator, &PAUSE_SCOPE_ROLES, &id),
+            Err(Ok(AccessControlError::CapabilityRevoked))
+        );
+        assert!(!client.is_paused(&PAUSE_SCOPE_ROLES));
+
+        // Recovery: a current admin issues a fresh capability.
+        let fresh = client.issue_capability(&super_admin, &operator, &action, &100, &1);
+        client.pause_with_capability(&operator, &PAUSE_SCOPE_ROLES, &fresh);
+        assert!(client.is_paused(&PAUSE_SCOPE_ROLES));
     }
 
 }

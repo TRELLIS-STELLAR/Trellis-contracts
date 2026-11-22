@@ -1,5 +1,7 @@
 # Bounded background work
 
+## Capacity and admission
+
 The existing worker accepts at most 64 pending plus indexed dead-letter jobs by
 default. Admins can call `configure_queue_capacity` with 1–256. This uses a new
 instance key and preserves WorkerConfig, Job, receipt and existing key layouts.
@@ -14,24 +16,35 @@ admission again when requeued. Pause blocks requeue as well as admission/executi
 Worker management and capacity changes require the configured admin's signature;
 enqueue and cranking retain their existing permissionless behavior.
 
+## Saturation runbook
+
 On saturation, stop producers, run due work, inspect terminal failures and discard
 resolved dead letters, then retry rejected work with the same dedupe key. Avoid
 busy-loop retries: respect next_due_ledger and the stored backoff policy. Completion
 and administrative discard release slots; no accepted work is silently dropped.
 Handler failures must remain idempotent as described in WORKERS.md.
 
+## Operational edge cases
+
 For pre-existing queues above capacity, admission stops while cranks and reserved
 requeues continue. Drain before rollout if bounded scan costs are required from
 the first transaction; existing large vectors are not truncated or migrated.
-Lowering capacity below occupancy similarly blocks only new work. Roll back a
-capacity change by restoring its previous value, or pause the worker during
-incident response. Persistent jobs/indexes require normal TTL maintenance and
+Lowering capacity below occupancy similarly blocks only new work.
+
+## Rollback and recovery
+
+Roll back a capacity change by restoring its previous value, or pause the worker
+during incident response. Persistent jobs/indexes require normal TTL maintenance and
 archive restoration together; missing archived entries are not completed jobs.
 Retained completed receipts and forensic records are audit history, outside the
 active-work bound, and follow the existing retention policy.
 
+## Verification
+
 Run `cargo test --manifest-path scripts/issue-verification/Cargo.toml test_queue_backpressure` for normal, saturated, retry, terminal,
 discard/requeue, pause, and unauthorized configuration coverage.
+
+## Wrapper integration
 
 The existing payment convenience wrapper maps framework failures other than
 Disabled/InvalidPolicy to InvalidArgument; direct worker integrations receive

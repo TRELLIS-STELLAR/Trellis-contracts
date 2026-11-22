@@ -1,6 +1,15 @@
 [
   {
     "version": "unreleased",
+    "date": "2026-11-22",
+    "impact": "compatible",
+    "summary": "Added an unauthenticated dependency-aware health endpoint to RegistryContract with authenticated status and dependency reporting, failure counters, and recovery semantics.",
+    "migration_notes": "No migration is required. Existing registry deployments remain compatible; clients may call health after deployment.",
+    "issue": 279,
+    "pr": null
+  },
+  {
+    "version": "unreleased",
     "date": "2026-09-26",
     "impact": "breaking",
     "summary": "Record schema versioning (V1/V2) added; V1 writes are now rejected \u2014 only V2 (with token binding) may be newly written, though V1 reads remain supported indefinitely via migrate_v1_to_v2.",

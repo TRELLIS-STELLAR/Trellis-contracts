@@ -421,5 +421,41 @@
     "migration_notes": "",
     "issue": 546,
     "pr": null
+  },
+  {
+    "version": "unreleased",
+    "date": "2026-11-22",
+    "impact": "compatible",
+    "summary": "Added deterministic fuzz testing for malformed payloads and boundary inputs with fund conservation and non-panic bounds in shared::fuzz_boundary_inputs (#577).",
+    "migration_notes": "",
+    "issue": 577,
+    "pr": null
+  },
+  {
+    "version": "unreleased",
+    "date": "2026-11-22",
+    "impact": "compatible",
+    "summary": "Created synthetic monitoring for critical workflows with stage-by-stage diagnostics, bounded retry limits, and operator controls in shared::workflow_synthetic_monitor (#578).",
+    "migration_notes": "",
+    "issue": 578,
+    "pr": null
+  },
+  {
+    "version": "unreleased",
+    "date": "2026-11-22",
+    "impact": "compatible",
+    "summary": "Implemented bounded cache invalidation, ledger-based stale entry detection, and capacity eviction safeguards in shared::bounded_cache (#579).",
+    "migration_notes": "",
+    "issue": 579,
+    "pr": null
+  },
+  {
+    "version": "unreleased",
+    "date": "2026-11-22",
+    "impact": "compatible",
+    "summary": "Added duplicate-submission concurrency coverage, deterministic idempotent re-execution verification, and stale-version conflict rejection in testing::concurrency_dup_stale (#580).",
+    "migration_notes": "",
+    "issue": 580,
+    "pr": null
   }
 ]

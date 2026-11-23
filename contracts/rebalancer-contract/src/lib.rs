@@ -2,11 +2,13 @@
 
 mod fee_calculator;
 mod logging;
+mod multi_hop;
 mod slippage_predictor;
 pub mod strategy_executor;
 
 pub use fee_calculator::calculate_total_fees;
 pub use logging::log_trade;
+pub use multi_hop::{check_multi_hop, MultiHopReport, MultiHopSwap};
 use shared::events::emit_action_executed;
 pub use slippage_predictor::predict_slippage;
 use soroban_sdk::{
@@ -36,6 +38,9 @@ pub enum RebalancerError {
     NotInitialized = 2,
     Unauthorized = 3,
     InvalidCapacity = 4,
+    InvalidMultiHopRoute = 5,
+    SlippageLimitExceeded = 6,
+    MinimumOutputNotMet = 7,
 }
 
 pub(crate) fn trade_capacity(env: &Env, pair: &(Symbol, Symbol)) -> Option<TradeCapacity> {
@@ -168,6 +173,24 @@ impl MultiAssetRebalancer {
             .instance()
             .set(&StorageKey::Capacity(asset_in, asset_out), &capacity);
         Ok(())
+    }
+
+    /// Authorize and validate a multi-hop swap before invoking downstream
+    /// venues. A failed check performs no writes, making quote retries safe.
+    pub fn execute_multi_hop(
+        env: Env,
+        caller: Address,
+        swap: MultiHopSwap,
+    ) -> Result<MultiHopReport, RebalancerError> {
+        let configured_admin: Option<Address> = env.storage().instance().get(&StorageKey::Admin);
+        let Some(configured_admin) = configured_admin else {
+            return Err(RebalancerError::NotInitialized);
+        };
+        if caller != configured_admin {
+            return Err(RebalancerError::Unauthorized);
+        }
+        caller.require_auth();
+        check_multi_hop(&env, &swap)
     }
 
     pub fn rebalance(

@@ -58,6 +58,7 @@ pub mod lifecycle_events;
 pub mod maintainer_approval;
 pub mod math;
 pub mod migration;
+pub mod migration_snapshot;
 pub mod notification_dedup;
 pub mod operational_metadata;
 pub mod operator_runbook;

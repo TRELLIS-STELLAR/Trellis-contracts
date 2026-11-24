@@ -1,6 +1,15 @@
 [
   {
     "version": "unreleased",
+    "date": "2026-11-24",
+    "impact": "compatible",
+    "summary": "Added import cancellation with reason/actor/ledger records, dry-run or confirmed admin cleanup of expired markers bounded to 50 fingerprints, and cancellation/cleanup events; existing import signatures and errors are unchanged (#482).",
+    "migration_notes": "",
+    "issue": 482,
+    "pr": null
+  },
+  {
+    "version": "unreleased",
     "date": "2026-09-26",
     "impact": "breaking",
     "summary": "Record schema versioning (V1/V2) added; V1 writes are now rejected — only V2 (with token binding) may be newly written, though V1 reads remain supported indefinitely via migrate_v1_to_v2.",

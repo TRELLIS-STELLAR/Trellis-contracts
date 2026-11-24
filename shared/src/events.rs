@@ -40,6 +40,8 @@ pub const PAYMENT_ESCROW_REFUNDED: Symbol = symbol_short!("pay_esc_f");
 pub const IMPORT_SIMULATED: Symbol = symbol_short!("imp_sim");
 pub const IMPORT_COMMITTED: Symbol = symbol_short!("imp_cmt");
 pub const IMPORT_FAILED: Symbol = symbol_short!("imp_fail");
+pub const IMPORT_CANCELLED: Symbol = symbol_short!("imp_can");
+pub const IMPORT_CANCEL_CLEANED: Symbol = symbol_short!("imp_ccln");
 
 // Canonical event-logging topic constants.
 pub const EVENT_LOG_INITIALIZED: Symbol = symbol_short!("evt_init");
@@ -934,6 +936,47 @@ pub fn emit_import_failed(
     env.events().publish(
         (symbol_short!("import"), symbol_short!("failed")),
         (caller.clone(), total_rows, error_count, error_code),
+    );
+}
+
+pub fn emit_import_cancelled(
+    env: &Env,
+    cancelled_by: &Address,
+    batch_fingerprint: &BytesN<32>,
+    reason: &Symbol,
+    cancelled_at_ledger: u64,
+) {
+    env.events().publish(
+        (symbol_short!("import"), IMPORT_CANCELLED),
+        (
+            cancelled_by.clone(),
+            batch_fingerprint.clone(),
+            reason.clone(),
+            cancelled_at_ledger,
+        ),
+    );
+}
+
+pub fn emit_import_cancellation_cleaned(
+    env: &Env,
+    admin: &Address,
+    evaluated_ledger: u64,
+    older_than_ledger: u32,
+    counts: (u32, u32, u32, u32),
+    confirm: bool,
+) {
+    env.events().publish(
+        (symbol_short!("import"), IMPORT_CANCEL_CLEANED),
+        (
+            admin.clone(),
+            evaluated_ledger,
+            older_than_ledger,
+            counts.0,
+            counts.1,
+            counts.2,
+            counts.3,
+            confirm,
+        ),
     );
 }
 

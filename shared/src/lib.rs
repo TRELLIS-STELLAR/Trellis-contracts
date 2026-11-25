@@ -130,6 +130,8 @@ pub mod nft_royalty;
 #[cfg(test)]
 pub mod test_boundary_properties;
 #[cfg(test)]
+pub mod test_problem_details_taxonomy;
+#[cfg(test)]
 pub mod test_schema_compat;
 // Re-export the most commonly-needed items at crate root for ergonomic use.
 pub use abuse::{

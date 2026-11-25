@@ -457,5 +457,41 @@
     "migration_notes": "",
     "issue": 522,
     "pr": null
+  },
+  {
+    "version": "unreleased",
+    "date": "2026-11-22",
+    "impact": "compatible",
+    "summary": "Added privacy-safe export with field-level authorization and allowlist filtering in shared::export, withholding personal fields for non-owner operational queries without mutating stored state (#581).",
+    "migration_notes": "",
+    "issue": 581,
+    "pr": null
+  },
+  {
+    "version": "unreleased",
+    "date": "2026-11-22",
+    "impact": "compatible",
+    "summary": "Implemented feature-flag rollout guard with staged canary traffic bucketing, error rate trip thresholds, and emergency rollback verification across all modules (#582).",
+    "migration_notes": "",
+    "issue": 582,
+    "pr": null
+  },
+  {
+    "version": "unreleased",
+    "date": "2026-11-22",
+    "impact": "compatible",
+    "summary": "Added WCAG 2.1 AA keyboard navigation, roving tabindex, modal focus traps, and async transaction status ARIA live region mapping in shared::accessibility and scripts (#583).",
+    "migration_notes": "",
+    "issue": 583,
+    "pr": null
+  },
+  {
+    "version": "unreleased",
+    "date": "2026-11-22",
+    "impact": "compatible",
+    "summary": "Created contributor diagnostics command and environment invariant validation across toolchain, Soroban SDK pins, Dalek crypto, and storage schema integrity (#584).",
+    "migration_notes": "",
+    "issue": 584,
+    "pr": null
   }
 ]

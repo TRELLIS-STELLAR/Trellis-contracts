@@ -424,38 +424,38 @@
   },
   {
     "version": "unreleased",
-    "date": "2026-11-22",
+    "date": "2026-11-24",
     "impact": "compatible",
-    "summary": "Added privacy-safe export with field-level authorization and allowlist filtering in shared::export, withholding personal fields for non-owner operational queries without mutating stored state (#581).",
+    "summary": "Added oracle price feed heartbeat validation and L2 deviation quarantine with auto-recovery and admin override controls in shared::oracle_quarantine (#518).",
     "migration_notes": "",
-    "issue": 581,
+    "issue": 518,
     "pr": null
   },
   {
     "version": "unreleased",
-    "date": "2026-11-22",
+    "date": "2026-11-24",
     "impact": "compatible",
-    "summary": "Implemented feature-flag rollout guard with staged canary traffic bucketing, error rate trip thresholds, and emergency rollback verification across all modules (#582).",
+    "summary": "Created multi-asset treasury reserve floor and auto-pause guard preventing reserve exhaustion and locking outflows on breach in shared::treasury_floor (#520).",
     "migration_notes": "",
-    "issue": 582,
+    "issue": 520,
     "pr": null
   },
   {
     "version": "unreleased",
-    "date": "2026-11-22",
+    "date": "2026-11-24",
     "impact": "compatible",
-    "summary": "Added WCAG 2.1 AA keyboard navigation, roving tabindex, modal focus traps, and async transaction status ARIA live region mapping in shared::accessibility and scripts (#583).",
+    "summary": "Implemented governance proposal timelock cancellation and collective admin veto quorum in shared::governance_timelock (#521).",
     "migration_notes": "",
-    "issue": 583,
+    "issue": 521,
     "pr": null
   },
   {
     "version": "unreleased",
-    "date": "2026-11-22",
+    "date": "2026-11-24",
     "impact": "compatible",
-    "summary": "Created contributor diagnostics command and environment invariant validation across toolchain, Soroban SDK pins, Dalek crypto, and storage schema integrity (#584).",
+    "summary": "Added NFT royalty split invariant enforcement across secondary sales guaranteeing exact token conservation and multi-recipient shares in shared::nft_royalty (#522).",
     "migration_notes": "",
-    "issue": 584,
+    "issue": 522,
     "pr": null
   }
 ]

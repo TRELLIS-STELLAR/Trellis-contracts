@@ -424,38 +424,38 @@
   },
   {
     "version": "unreleased",
-    "date": "2026-11-22",
+    "date": "2026-11-24",
     "impact": "compatible",
-    "summary": "Added deterministic fuzz testing for malformed payloads and boundary inputs with fund conservation and non-panic bounds in shared::fuzz_boundary_inputs (#577).",
+    "summary": "Added oracle price feed heartbeat validation and L2 deviation quarantine with auto-recovery and admin override controls in shared::oracle_quarantine (#518).",
     "migration_notes": "",
-    "issue": 577,
+    "issue": 518,
     "pr": null
   },
   {
     "version": "unreleased",
-    "date": "2026-11-22",
+    "date": "2026-11-24",
     "impact": "compatible",
-    "summary": "Created synthetic monitoring for critical workflows with stage-by-stage diagnostics, bounded retry limits, and operator controls in shared::workflow_synthetic_monitor (#578).",
+    "summary": "Created multi-asset treasury reserve floor and auto-pause guard preventing reserve exhaustion and locking outflows on breach in shared::treasury_floor (#520).",
     "migration_notes": "",
-    "issue": 578,
+    "issue": 520,
     "pr": null
   },
   {
     "version": "unreleased",
-    "date": "2026-11-22",
+    "date": "2026-11-24",
     "impact": "compatible",
-    "summary": "Implemented bounded cache invalidation, ledger-based stale entry detection, and capacity eviction safeguards in shared::bounded_cache (#579).",
+    "summary": "Implemented governance proposal timelock cancellation and collective admin veto quorum in shared::governance_timelock (#521).",
     "migration_notes": "",
-    "issue": 579,
+    "issue": 521,
     "pr": null
   },
   {
     "version": "unreleased",
-    "date": "2026-11-22",
+    "date": "2026-11-24",
     "impact": "compatible",
-    "summary": "Added duplicate-submission concurrency coverage, deterministic idempotent re-execution verification, and stale-version conflict rejection in testing::concurrency_dup_stale (#580).",
+    "summary": "Added NFT royalty split invariant enforcement across secondary sales guaranteeing exact token conservation and multi-recipient shares in shared::nft_royalty (#522).",
     "migration_notes": "",
-    "issue": 580,
+    "issue": 522,
     "pr": null
   }
 ]

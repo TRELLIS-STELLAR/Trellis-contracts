@@ -1541,6 +1541,9 @@ mod profile_budget;
 #[cfg(test)]
 mod aid_export_test;
 
+#[cfg(test)]
+mod invariants_test;
+
 /// Authorization tests for hidden and archived records (Issue #480).
 #[cfg(test)]
 mod hidden_archived_auth_test;

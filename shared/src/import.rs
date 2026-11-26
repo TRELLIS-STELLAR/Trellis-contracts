@@ -38,10 +38,11 @@ use soroban_sdk::{
     contracterror, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, Vec,
 };
 
+use crate::errors::Error;
 pub use crate::migration::RollbackStrategy;
 use crate::storage::{
-    instance_get, instance_set, persistent_get, persistent_has, persistent_read, persistent_set,
-    temporary_has, temporary_remove, temporary_set,
+    instance_get, instance_remove, instance_set, persistent_get, persistent_has, persistent_read,
+    persistent_remove, persistent_set, temporary_has, temporary_remove, temporary_set,
 };
 
 // ----------------------------------------------------------------------------
@@ -60,6 +61,8 @@ pub const MAX_EXTERNAL_ID_LEN: u32 = 64;
 /// Maximum number of quarantined rows retained per batch for operator review.
 pub const MAX_QUARANTINE_ROWS: u32 = 100;
 
+pub const MAX_CANCELLATION_CLEANUP: u32 = 50;
+
 /// Temporary storage reentrancy lock key.
 const REENTRANCY_KEY: Symbol = symbol_short!("imp_lck");
 
@@ -72,8 +75,10 @@ const LAST_BATCH_KEY: Symbol = symbol_short!("imp_last");
 /// Instance storage key for the last committed batch record count (rollback anchor).
 const LAST_BATCH_COUNT_KEY: Symbol = symbol_short!("imp_lcnt");
 
-/// Persistent cooperative-cancellation marker for an import fingerprint.
+/// Instance cooperative-cancellation marker for an import fingerprint.
 const IMPORT_CANCEL_KEY: Symbol = symbol_short!("imp_cncl");
+
+const IMPORT_CANCEL_RECORD_KEY: Symbol = symbol_short!("imp_cnr");
 
 // ----------------------------------------------------------------------------
 // Error Codes (Range 940–949)
@@ -256,6 +261,26 @@ pub struct StoredImportRecord {
     pub version: u32,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImportCancellationRecord {
+    pub fingerprint: BytesN<32>,
+    pub cancelled_by: Address,
+    pub reason: Symbol,
+    pub cancelled_at_ledger: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImportCancellationCleanupReport {
+    pub evaluated_ledger: u64,
+    pub eligible: Vec<BytesN<32>>,
+    pub removed: Vec<BytesN<32>>,
+    pub retained: Vec<BytesN<32>>,
+    pub not_found: Vec<BytesN<32>>,
+    pub destructive: bool,
+}
+
 // ----------------------------------------------------------------------------
 // Storage Key Helpers
 // ----------------------------------------------------------------------------
@@ -267,6 +292,10 @@ fn external_record_key(external_id: &Bytes) -> (Symbol, Bytes) {
 /// Storage key for a batch-level traceability marker.
 fn batch_marker_key(fingerprint: &BytesN<32>) -> (Symbol, BytesN<32>) {
     (symbol_short!("imp_bat"), fingerprint.clone())
+}
+
+fn cancellation_record_key(fingerprint: &BytesN<32>) -> (Symbol, BytesN<32>) {
+    (IMPORT_CANCEL_RECORD_KEY, fingerprint.clone())
 }
 
 // ----------------------------------------------------------------------------
@@ -744,6 +773,40 @@ pub fn execute_import(
     })
 }
 
+fn record_cancellation(
+    env: &Env,
+    caller: &Address,
+    fingerprint: &BytesN<32>,
+    reason: Symbol,
+) -> ImportCancellationRecord {
+    if let Some(existing) = persistent_get(env, &cancellation_record_key(fingerprint)) {
+        if !is_import_cancelled(env, fingerprint) {
+            instance_set(env, &(IMPORT_CANCEL_KEY, fingerprint.clone()), &true);
+        }
+        return existing;
+    }
+
+    let cancelled_at_ledger = env.ledger().sequence() as u64;
+    instance_set(env, &(IMPORT_CANCEL_KEY, fingerprint.clone()), &true);
+
+    let record = ImportCancellationRecord {
+        fingerprint: fingerprint.clone(),
+        cancelled_by: caller.clone(),
+        reason,
+        cancelled_at_ledger,
+    };
+    persistent_set(env, &cancellation_record_key(fingerprint), &record);
+
+    crate::events::emit_import_cancelled(
+        env,
+        caller,
+        fingerprint,
+        &record.reason,
+        cancelled_at_ledger,
+    );
+    record
+}
+
 /// Request cancellation of a pending import before it reaches its commit
 /// phase. The marker is keyed by the deterministic batch fingerprint, so a
 /// retry of the same batch observes the same decision and cannot partially
@@ -754,13 +817,107 @@ pub fn cancel_import(
     fingerprint: &BytesN<32>,
 ) -> Result<(), ImportError> {
     caller.require_auth();
-    instance_set(env, &(IMPORT_CANCEL_KEY, fingerprint.clone()), &true);
+    record_cancellation(env, caller, fingerprint, symbol_short!("legacy"));
     Ok(())
+}
+
+pub fn cancel_import_with_reason(
+    env: &Env,
+    caller: &Address,
+    fingerprint: &BytesN<32>,
+    reason: Symbol,
+) -> Result<ImportCancellationRecord, Error> {
+    crate::auth::require_admin(env, caller)?;
+    Ok(record_cancellation(env, caller, fingerprint, reason))
 }
 
 /// Returns whether an operator has cancelled this import fingerprint.
 pub fn is_import_cancelled(env: &Env, fingerprint: &BytesN<32>) -> bool {
     instance_get(env, &(IMPORT_CANCEL_KEY, fingerprint.clone())).unwrap_or(false)
+}
+
+pub fn get_import_cancellation(
+    env: &Env,
+    fingerprint: &BytesN<32>,
+) -> Option<ImportCancellationRecord> {
+    persistent_get(env, &cancellation_record_key(fingerprint))
+}
+
+pub fn cleanup_import_cancellations(
+    env: &Env,
+    caller: &Address,
+    fingerprints: &Vec<BytesN<32>>,
+    older_than_ledger: u32,
+    confirm: bool,
+) -> Result<ImportCancellationCleanupReport, Error> {
+    crate::auth::require_admin(env, caller)?;
+    if fingerprints.len() > MAX_CANCELLATION_CLEANUP {
+        return Err(Error::InvalidArgument);
+    }
+
+    let evaluated_ledger = env.ledger().sequence() as u64;
+    let minimum_age = older_than_ledger as u64;
+    let mut eligible = Vec::new(env);
+    let mut removed = Vec::new(env);
+    let mut retained = Vec::new(env);
+    let mut not_found = Vec::new(env);
+
+    for index in 0..fingerprints.len() {
+        let Some(fingerprint) = fingerprints.get(index) else {
+            continue;
+        };
+        let marker_key = (IMPORT_CANCEL_KEY, fingerprint.clone());
+        let marker: bool = instance_get(env, &marker_key).unwrap_or(false);
+        let record: Option<ImportCancellationRecord> =
+            persistent_get(env, &cancellation_record_key(&fingerprint));
+
+        if !marker && record.is_none() {
+            not_found.push_back(fingerprint);
+            continue;
+        }
+
+        let is_old_enough = match &record {
+            Some(record) => {
+                evaluated_ledger >= record.cancelled_at_ledger.saturating_add(minimum_age)
+            }
+            None => minimum_age == 0,
+        };
+        if !is_old_enough {
+            retained.push_back(fingerprint);
+            continue;
+        }
+
+        eligible.push_back(fingerprint.clone());
+        if confirm {
+            instance_remove(env, &marker_key);
+            persistent_remove(env, &cancellation_record_key(&fingerprint));
+            removed.push_back(fingerprint);
+        }
+    }
+
+    let destructive = confirm && !removed.is_empty();
+    let report = ImportCancellationCleanupReport {
+        evaluated_ledger,
+        eligible,
+        removed,
+        retained,
+        not_found,
+        destructive,
+    };
+    crate::events::emit_import_cancellation_cleaned(
+        env,
+        caller,
+        evaluated_ledger,
+        older_than_ledger,
+        (
+            report.eligible.len(),
+            report.removed.len(),
+            report.retained.len(),
+            report.not_found.len(),
+        ),
+        confirm,
+    );
+    Ok(report)
 }
 
 // ----------------------------------------------------------------------------
@@ -780,4 +937,320 @@ pub fn has_imported_record(env: &Env, external_id: &Bytes) -> bool {
 /// Returns the number of import records committed so far.
 pub fn get_import_counter(env: &Env) -> u64 {
     instance_get(env, &IMPORT_COUNTER_KEY).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::{
+        cancel_import, cancel_import_with_reason, cleanup_import_cancellations,
+        compute_batch_fingerprint, execute_import, get_import_cancellation, get_import_counter,
+        get_imported_record, has_imported_record, is_import_cancelled, DuplicatePolicy, Error,
+        ImportConfig, ImportError, ImportItem, ImportMode, MAX_CANCELLATION_CLEANUP,
+    };
+    use crate::auth::set_admin;
+    use crate::events::{IMPORT_CANCELLED, IMPORT_CANCEL_CLEANED};
+    use soroban_sdk::{
+        contract, contractimpl, symbol_short,
+        testutils::{Address as _, Events as _, Ledger as _},
+        Address, Bytes, BytesN, Env, IntoVal, Vec,
+    };
+
+    #[contract]
+    struct DummyImportContract;
+
+    #[contractimpl]
+    impl DummyImportContract {
+        pub fn noop(_env: Env) {}
+    }
+
+    struct Ctx {
+        env: Env,
+        contract_id: Address,
+        admin: Address,
+        alice: Address,
+    }
+
+    impl Ctx {
+        fn run<T>(&self, f: impl FnOnce() -> T) -> T {
+            self.env.as_contract(&self.contract_id, f)
+        }
+    }
+
+    fn setup() -> Ctx {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        env.ledger().set_timestamp(1_000);
+        env.ledger().set_sequence_number(100);
+
+        let contract_id = env.register_contract(None, DummyImportContract);
+        let admin = Address::generate(&env);
+        let alice = Address::generate(&env);
+        env.as_contract(&contract_id, || set_admin(&env, &admin));
+
+        Ctx {
+            env,
+            contract_id,
+            admin,
+            alice,
+        }
+    }
+
+    fn batch(ctx: &Ctx, external_id: &[u8]) -> Vec<ImportItem> {
+        let mut items = Vec::new(&ctx.env);
+        items.push_back(ImportItem {
+            row_id: 0,
+            external_id: Some(Bytes::from_slice(&ctx.env, external_id)),
+            recipient: ctx.alice.clone(),
+            amount: 100,
+            expiry: 10_000,
+            metadata_hash: None,
+        });
+        items
+    }
+
+    fn config() -> ImportConfig {
+        ImportConfig {
+            dry_run: false,
+            mode: ImportMode::AllOrNothing,
+            duplicate_policy: DuplicatePolicy::SkipExisting,
+            max_rows: 10,
+        }
+    }
+
+    fn fingerprints(ctx: &Ctx, values: &[BytesN<32>]) -> Vec<BytesN<32>> {
+        let mut result = Vec::new(&ctx.env);
+        for value in values {
+            result.push_back(value.clone());
+        }
+        result
+    }
+
+    #[test]
+    fn cancellation_blocks_retry_until_bounded_admin_cleanup() {
+        let ctx = setup();
+        let items = batch(&ctx, b"CANCEL-RETRY");
+        let fingerprint = ctx.run(|| compute_batch_fingerprint(&ctx.env, &items));
+
+        let record = ctx.run(|| {
+            cancel_import_with_reason(
+                &ctx.env,
+                &ctx.admin,
+                &fingerprint,
+                symbol_short!("incident"),
+            )
+            .unwrap()
+        });
+        assert_eq!(record.cancelled_by, ctx.admin);
+        assert_eq!(record.reason, symbol_short!("incident"));
+        assert_eq!(record.cancelled_at_ledger, 100);
+        assert!(ctx.run(|| is_import_cancelled(&ctx.env, &fingerprint)));
+        assert_eq!(
+            ctx.run(|| get_import_cancellation(&ctx.env, &fingerprint)),
+            Some(record)
+        );
+
+        let (_, topics, _) = ctx.env.events().all().last().unwrap();
+        assert_eq!(
+            topics,
+            (symbol_short!("import"), IMPORT_CANCELLED).into_val(&ctx.env)
+        );
+
+        assert_eq!(
+            ctx.run(|| execute_import(&ctx.env, &ctx.admin, &items, &config())),
+            Err(ImportError::ImportCancelled)
+        );
+        assert_eq!(ctx.run(|| get_import_counter(&ctx.env)), 0);
+
+        let candidates = fingerprints(&ctx, &[fingerprint.clone()]);
+
+        ctx.env.ledger().set_sequence_number(105);
+        let retained = ctx.run(|| {
+            cleanup_import_cancellations(&ctx.env, &ctx.admin, &candidates, 10, false).unwrap()
+        });
+        assert_eq!(retained.eligible.len(), 0);
+        assert_eq!(retained.retained.len(), 1);
+        assert!(!retained.destructive);
+        assert!(ctx.run(|| is_import_cancelled(&ctx.env, &fingerprint)));
+
+        ctx.env.ledger().set_sequence_number(110);
+        let preview = ctx.run(|| {
+            cleanup_import_cancellations(&ctx.env, &ctx.admin, &candidates, 10, false).unwrap()
+        });
+        assert_eq!(preview.eligible, candidates);
+        assert_eq!(preview.removed.len(), 0);
+        assert!(!preview.destructive);
+        assert!(ctx.run(|| is_import_cancelled(&ctx.env, &fingerprint)));
+
+        let cleaned = ctx.run(|| {
+            cleanup_import_cancellations(&ctx.env, &ctx.admin, &candidates, 10, true).unwrap()
+        });
+        assert_eq!(cleaned.removed, candidates);
+        assert!(cleaned.destructive);
+        assert!(!ctx.run(|| is_import_cancelled(&ctx.env, &fingerprint)));
+        assert_eq!(
+            ctx.run(|| get_import_cancellation(&ctx.env, &fingerprint)),
+            None
+        );
+
+        let (_, topics, _) = ctx.env.events().all().last().unwrap();
+        assert_eq!(
+            topics,
+            (symbol_short!("import"), IMPORT_CANCEL_CLEANED).into_val(&ctx.env)
+        );
+
+        let report = ctx.run(|| execute_import(&ctx.env, &ctx.admin, &items, &config()).unwrap());
+        assert_eq!(report.create_count, 1);
+        assert_eq!(ctx.run(|| get_import_counter(&ctx.env)), 1);
+    }
+
+    #[test]
+    fn privileged_cancellation_paths_reject_non_admin() {
+        let ctx = setup();
+        ctx.run(|| {
+            let fingerprint = BytesN::from_array(&ctx.env, &[7; 32]);
+            assert_eq!(
+                cancel_import_with_reason(
+                    &ctx.env,
+                    &ctx.alice,
+                    &fingerprint,
+                    symbol_short!("incident"),
+                ),
+                Err(Error::Unauthorized)
+            );
+            assert!(!is_import_cancelled(&ctx.env, &fingerprint));
+            assert_eq!(get_import_cancellation(&ctx.env, &fingerprint), None);
+
+            let candidates = fingerprints(&ctx, &[fingerprint.clone()]);
+            assert_eq!(
+                cleanup_import_cancellations(&ctx.env, &ctx.alice, &candidates, 0, true),
+                Err(Error::Unauthorized)
+            );
+            assert!(!is_import_cancelled(&ctx.env, &fingerprint));
+            assert_eq!(get_import_cancellation(&ctx.env, &fingerprint), None);
+        });
+    }
+
+    #[test]
+    fn legacy_cancellation_remains_authenticated_and_idempotent() {
+        let ctx = setup();
+        let items = batch(&ctx, b"LEGACY-CANCEL");
+        let fingerprint = ctx.run(|| compute_batch_fingerprint(&ctx.env, &items));
+
+        ctx.run(|| cancel_import(&ctx.env, &ctx.alice, &fingerprint).unwrap());
+        let legacy = ctx.run(|| get_import_cancellation(&ctx.env, &fingerprint).unwrap());
+        assert_eq!(legacy.cancelled_by, ctx.alice);
+        assert_eq!(legacy.reason, symbol_short!("legacy"));
+
+        let repeated = ctx.run(|| {
+            cancel_import_with_reason(
+                &ctx.env,
+                &ctx.admin,
+                &fingerprint,
+                symbol_short!("incident"),
+            )
+            .unwrap()
+        });
+        assert_eq!(repeated, legacy);
+        assert_eq!(
+            ctx.run(|| execute_import(&ctx.env, &ctx.admin, &items, &config())),
+            Err(ImportError::ImportCancelled)
+        );
+
+        let candidates = fingerprints(&ctx, &[fingerprint.clone()]);
+        let cleaned = ctx.run(|| {
+            cleanup_import_cancellations(&ctx.env, &ctx.admin, &candidates, 0, true).unwrap()
+        });
+        assert_eq!(cleaned.removed, candidates);
+        assert!(!ctx.run(|| is_import_cancelled(&ctx.env, &fingerprint)));
+        let first = ctx.run(|| execute_import(&ctx.env, &ctx.admin, &items, &config()).unwrap());
+        let second = ctx.run(|| execute_import(&ctx.env, &ctx.admin, &items, &config()).unwrap());
+        assert_eq!(first.create_count, 1);
+        assert_eq!(second.skip_count, 1);
+    }
+
+    #[test]
+    fn cleanup_classifies_missing_and_too_new_entries_and_is_bounded() {
+        let ctx = setup();
+        let items = batch(&ctx, b"RETAIN-CANCEL");
+        let fingerprint = ctx.run(|| compute_batch_fingerprint(&ctx.env, &items));
+        let missing = BytesN::from_array(&ctx.env, &[9; 32]);
+        ctx.run(|| {
+            cancel_import_with_reason(
+                &ctx.env,
+                &ctx.admin,
+                &fingerprint,
+                symbol_short!("operator"),
+            )
+            .unwrap()
+        });
+
+        ctx.env.ledger().set_sequence_number(105);
+        let candidates = fingerprints(&ctx, &[fingerprint.clone(), missing.clone()]);
+        let report = ctx.run(|| {
+            cleanup_import_cancellations(&ctx.env, &ctx.admin, &candidates, 10, true).unwrap()
+        });
+        assert_eq!(report.eligible.len(), 0);
+        assert_eq!(report.removed.len(), 0);
+        assert_eq!(report.retained, fingerprints(&ctx, &[fingerprint.clone()]));
+        assert_eq!(report.not_found, fingerprints(&ctx, &[missing]));
+        assert!(!report.destructive);
+        assert!(ctx.run(|| is_import_cancelled(&ctx.env, &fingerprint)));
+
+        let mut oversized = fingerprints(&ctx, &[fingerprint.clone()]);
+        for value in 0..MAX_CANCELLATION_CLEANUP {
+            oversized.push_back(BytesN::from_array(&ctx.env, &[value as u8; 32]));
+        }
+        assert_eq!(
+            ctx.run(|| cleanup_import_cancellations(&ctx.env, &ctx.admin, &oversized, 0, true)),
+            Err(Error::InvalidArgument)
+        );
+        assert!(ctx.run(|| is_import_cancelled(&ctx.env, &fingerprint)));
+    }
+
+    #[test]
+    fn cleanup_preserves_committed_import_records() {
+        let ctx = setup();
+        let cancelled_items = batch(&ctx, b"CANCELLED-BATCH");
+        let cancelled_fingerprint =
+            ctx.run(|| compute_batch_fingerprint(&ctx.env, &cancelled_items));
+        ctx.run(|| {
+            cancel_import_with_reason(
+                &ctx.env,
+                &ctx.admin,
+                &cancelled_fingerprint,
+                symbol_short!("incident"),
+            )
+            .unwrap()
+        });
+
+        let committed_items = batch(&ctx, b"COMMITTED-BATCH");
+        let committed_fingerprint =
+            ctx.run(|| compute_batch_fingerprint(&ctx.env, &committed_items));
+        ctx.run(|| execute_import(&ctx.env, &ctx.admin, &committed_items, &config()).unwrap());
+
+        let candidates = fingerprints(&ctx, &[cancelled_fingerprint.clone()]);
+        ctx.run(|| {
+            cleanup_import_cancellations(&ctx.env, &ctx.admin, &candidates, 0, true).unwrap()
+        });
+
+        assert!(!ctx.run(|| is_import_cancelled(&ctx.env, &cancelled_fingerprint)));
+        assert!(ctx.run(|| has_imported_record(
+            &ctx.env,
+            &Bytes::from_slice(&ctx.env, b"COMMITTED-BATCH")
+        )));
+        assert_eq!(
+            ctx.run(|| get_imported_record(
+                &ctx.env,
+                &Bytes::from_slice(&ctx.env, b"COMMITTED-BATCH")
+            )
+            .unwrap()
+            .amount),
+            100
+        );
+        assert_eq!(ctx.run(|| get_import_counter(&ctx.env)), 1);
+        assert_eq!(
+            committed_fingerprint,
+            ctx.run(|| compute_batch_fingerprint(&ctx.env, &committed_items))
+        );
+    }
 }

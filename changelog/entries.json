@@ -1,6 +1,15 @@
 [
   {
     "version": "unreleased",
+    "date": "2026-11-24",
+    "impact": "compatible",
+    "summary": "Added import cancellation with reason/actor/ledger records, dry-run or confirmed admin cleanup of expired markers bounded to 50 fingerprints, and cancellation/cleanup events; existing import signatures and errors are unchanged (#482).",
+    "migration_notes": "",
+    "issue": 482,
+    "pr": null
+  },
+  {
+    "version": "unreleased",
     "date": "2026-11-22",
     "impact": "compatible",
     "summary": "Added an unauthenticated dependency-aware health endpoint to RegistryContract with authenticated status and dependency reporting, failure counters, and recovery semantics.",

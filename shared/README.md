@@ -115,6 +115,8 @@ for backward compatibility. New protocol code should use the typed helpers in
 | `ContractResumed` | `emit_contract_resumed` | `("contract", "resumed")` | `(Address actor, u64 resumed_at)` |
 | `ContractUpgraded` | `emit_contract_upgraded` | `("contract", "upgraded")` | `(Address actor, BytesN<32> wasm_hash, u64 upgraded_at)` |
 | `AuditHeadCheckpoint` | `publish_head_checkpoint` (`shared::audit_ledger`) | `("audit", "head")` | `(u64 length, BytesN<32> head_hash, u32 last_ledger, u64 last_timestamp)` |
+| `ImportCancelled` | `emit_import_cancelled` | `("import", "cancelled")` | `(Address cancelled_by, BytesN<32> batch_fingerprint, Symbol reason, u64 cancelled_at_ledger)` |
+| `ImportCancellationCleaned` | `emit_import_cancellation_cleaned` | `("import", "cleaned")` | `(Address admin, u64 evaluated_ledger, u32 older_than_ledger, u32 eligible, u32 removed, u32 retained, u32 not_found, bool confirm)` |
 | `ModuleInitialized` | `emit_module_initialized` | `("logging", "initialized")` | `(Symbol module, u32 version, Address caller, u64 initialized_at)` |
 | `ActionExecuted` | `emit_action_executed` | `("logging", "action")` | `(Symbol module, Symbol action, Address caller, bool success, u64 executed_at)` |
 | `PermissionChanged` | `emit_permission_changed` | `("logging", "permission")` | `(Symbol module, Symbol role, Address subject, bool granted, u64 changed_at)` |

@@ -213,3 +213,63 @@ value read back from the deployed contract.
 - An empty list also fails. A gate that verified nothing has not passed.
 - The check is offline and pure. The live read-back is still performed by
   `scripts/verify-deployment.cjs`, which needs network access.
+
+---
+
+## 10. Migration and Recovery Evidence (Issue #586)
+
+A `GateCheck` with status `Passed` is only a claim. `shared::release_evidence`
+stores the proof behind the migration and rollback pillars per release and
+module. It only produces passing checks when that proof exists and agrees with
+itself.
+
+| Evidence | Recorded by | Accepted when |
+|----------|-------------|---------------|
+| Migration | `record_migration_evidence` | `to_version > from_version`, the dry-run journal hash is non-zero, and no records were left unmigrated |
+| Recovery | `record_recovery_evidence` | a stored `RollbackRehearsalReceipt` exists for the same module, passed with state intact, and did not rely on `Manual` |
+
+At release time either call `require_release_evidence(env, release, modules)`,
+or append `evidence_gate_checks(env, release, modules)` to the
+`ReleaseManifest` passed to `evaluate_release_readiness`. Missing or
+inconsistent evidence becomes a `Failed` check and blocks the release.
+
+### 10.1 Paths
+
+- **Normal:** record migration evidence, run `rehearse_rollback` against the
+  migration's `to_version`, then record recovery evidence from the receipt.
+  Both checks pass.
+- **Failure:** an invalid submission returns an error and stores nothing:
+  - a bad version step, unmigrated records or a zero journal hash give
+    `MissingMigrationVerification`
+  - an unknown receipt gives `MissingRollbackRehearsal`
+  - a receipt from another module gives `InvalidModule`
+  - a failed or `Manual` rehearsal gives `RehearsalSimulationFailed`
+- **Retry:** fix the input and submit again. An accepted submission replaces
+  the previous record and increments `attempt`. A rejected one leaves the
+  previous record and its `attempt` unchanged.
+- **Authorization:** only the shared admin can record evidence. Any other
+  caller gets `UnauthorizedSignoff` and nothing is stored. Reading and checking
+  evidence needs no authorization.
+
+### 10.2 Edge Cases
+
+- **Stale recovery evidence.** If migration evidence is resubmitted with a new
+  `to_version`, the recorded rehearsal no longer covers it. The gate fails with
+  `MissingRollbackRehearsal` and the check's details read `rcv_stale` until a
+  new rehearsal is run and recorded.
+- **Order does not matter.** Recovery evidence can be recorded before migration
+  evidence. Consistency is checked when the gate runs.
+- **Scoped per release.** Evidence recorded for `v1_0_0` does not satisfy
+  `v2_0_0`.
+- **Empty module list.** `require_release_evidence` returns `InvalidManifest`.
+  A gate that checked nothing has not passed.
+- **Forward-fix rehearsals.** `ForwardFix` receipts are accepted. Their
+  `from_version` is still the version being released.
+
+### 10.3 Recovery and Rollback
+
+Evidence lives in instance storage under new keys (`rel_mig`, `rel_rcv`).
+Existing types, error codes and storage entries are unchanged, so no migration
+is needed. To withdraw a release's evidence, record corrected evidence over it,
+or release under a new version symbol. If a gate failure blocks an urgent fix,
+use the dual-admin emergency bypass described in section 7.

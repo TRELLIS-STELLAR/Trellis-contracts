@@ -102,6 +102,42 @@ fn test_simulate_high_impact_tightening_preview() {
 }
 
 #[test]
+fn issue_490_failed_preview_can_be_retried_without_consuming_preview_state() {
+    let (env, admin, _) = setup();
+    let defaults = default_policy_parameters(PolicyType::TreasuryLimits);
+
+    let invalid_change = ProposedPolicyChange {
+        module: PolicyModule::Treasury,
+        policy_type: PolicyType::TreasuryLimits,
+        new_params: PolicyParameters {
+            primary_limit: -1,
+            ..defaults.clone()
+        },
+        rationale: String::from_str(&env, "invalid preview should not reserve an id"),
+    };
+    assert_eq!(
+        simulate_policy_preview(&env, &admin, &invalid_change, 200, 100),
+        Err(PolicySimulationError::InvalidPolicyConfig)
+    );
+
+    let valid_change = ProposedPolicyChange {
+        module: PolicyModule::Treasury,
+        policy_type: PolicyType::TreasuryLimits,
+        new_params: PolicyParameters {
+            primary_limit: defaults.primary_limit / 2,
+            ..defaults
+        },
+        rationale: String::from_str(&env, "retry with a valid policy preview"),
+    };
+    let preview = simulate_policy_preview(&env, &admin, &valid_change, 200, 100).unwrap();
+
+    assert_eq!(preview.preview_id, 1);
+    assert_eq!(preview.affected_records_count, 100);
+    assert_eq!(preview.affected_users_count, 50);
+    assert_eq!(get_simulation_preview(&env, preview.preview_id).unwrap(), preview);
+}
+
+#[test]
 fn test_commit_requires_dual_signoff_for_high_impact() {
     let (env, admin, co_admin) = setup();
     let current_default = default_policy_parameters(PolicyType::AidDisbursement);

@@ -2,11 +2,13 @@
 
 mod fee_calculator;
 mod logging;
+mod multi_hop;
 mod slippage_predictor;
 pub mod strategy_executor;
 
 pub use fee_calculator::calculate_total_fees;
 pub use logging::log_trade;
+pub use multi_hop::{check_multi_hop, MultiHopReport, MultiHopSwap};
 use shared::events::emit_action_executed;
 pub use slippage_predictor::predict_slippage;
 use soroban_sdk::{
@@ -36,6 +38,9 @@ pub enum RebalancerError {
     NotInitialized = 2,
     Unauthorized = 3,
     InvalidCapacity = 4,
+    InvalidMultiHopRoute = 5,
+    SlippageLimitExceeded = 6,
+    MinimumOutputNotMet = 7,
 }
 
 pub(crate) fn trade_capacity(env: &Env, pair: &(Symbol, Symbol)) -> Option<TradeCapacity> {
@@ -115,6 +120,15 @@ pub struct SimulationResult {
     pub expected_slippage: U256,
 }
 
+/// The planner's decision before submitting a rebalance transaction.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RebalanceDecision {
+    Execute,
+    DeferredForDrift,
+    DeferredForGas,
+}
+
 #[contract]
 pub struct MultiAssetRebalancer;
 
@@ -168,6 +182,42 @@ impl MultiAssetRebalancer {
             .instance()
             .set(&StorageKey::Capacity(asset_in, asset_out), &capacity);
         Ok(())
+    }
+
+    /// Authorize and validate a multi-hop swap before invoking downstream
+    /// venues. A failed check performs no writes, making quote retries safe.
+    pub fn execute_multi_hop(
+        env: Env,
+        caller: Address,
+        swap: MultiHopSwap,
+    ) -> Result<MultiHopReport, RebalancerError> {
+        let configured_admin: Option<Address> = env.storage().instance().get(&StorageKey::Admin);
+        let Some(configured_admin) = configured_admin else {
+            return Err(RebalancerError::NotInitialized);
+        };
+        if caller != configured_admin {
+            return Err(RebalancerError::Unauthorized);
+        }
+        caller.require_auth();
+        check_multi_hop(&env, &swap)
+    /// Apply a hysteresis band to portfolio drift and defer work whose
+    /// estimated cost exceeds the caller's current gas budget. Equality at
+    /// the drift threshold is intentional: it makes the trigger stable at
+    /// the boundary instead of oscillating between two decisions.
+    pub fn decide_rebalance(
+        _env: Env,
+        portfolio_drift_bps: u32,
+        hysteresis_bps: u32,
+        estimated_gas: u64,
+        gas_budget: u64,
+    ) -> RebalanceDecision {
+        if portfolio_drift_bps < hysteresis_bps {
+            RebalanceDecision::DeferredForDrift
+        } else if estimated_gas > gas_budget {
+            RebalanceDecision::DeferredForGas
+        } else {
+            RebalanceDecision::Execute
+        }
     }
 
     pub fn rebalance(

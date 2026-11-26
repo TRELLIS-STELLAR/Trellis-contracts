@@ -81,6 +81,7 @@ pub mod reconciliation;
 pub mod recovery;
 pub mod rare_failure_fixtures;
 pub mod release_artifacts;
+pub mod release_evidence;
 pub mod release_readiness;
 pub mod replay;
 pub mod resumable_repair;

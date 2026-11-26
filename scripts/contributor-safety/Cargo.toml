@@ -1,0 +1,16 @@
+[package]
+name = "contributor-safety-verification"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+# Imported production modules are dependencies of the focused integration tests.
+# Their unrelated embedded unit tests belong to the main workspace suite.
+test = false
+doctest = false
+
+[workspace]
+
+[dependencies]
+soroban-sdk = { version = "=21.7.7", features = ["testutils"] }

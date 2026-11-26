@@ -233,6 +233,11 @@ pub fn set_risk_policy(
     require_admin(env, admin)?;
 
     if policy.velocity_window_ledgers == 0
+        || policy.velocity_burst_limit == 0
+        || policy.dormancy_window_ledgers <= policy.velocity_window_ledgers
+        || policy.dual_auth_threshold == 0
+        || policy.throttle_threshold == 0
+        || policy.throttle_threshold > 1000
         || policy.block_threshold <= policy.dual_auth_threshold
         || policy.block_threshold > 1000
     {
@@ -297,7 +302,7 @@ pub fn evaluate_risk(env: &Env, ctx: &ActionContext) -> RiskAssessment {
 
     // 1. Amount ratio factor: (amount / max_reference_amount)
     if ctx.max_reference_amount > 0 && ctx.amount > 0 {
-        let ratio_bps = ((ctx.amount * 10_000) / ctx.max_reference_amount) as u32;
+        let ratio_bps = amount_ratio_bps(ctx.amount, ctx.max_reference_amount);
         if ratio_bps >= 5000 {
             // >= 50% of reference pool
             let score = ((ratio_bps * 350) / 10_000).min(350);
@@ -327,7 +332,7 @@ pub fn evaluate_risk(env: &Env, ctx: &ActionContext) -> RiskAssessment {
 
     // 3. Prior strikes factor
     if ctx.prior_strikes > 0 {
-        let score = (ctx.prior_strikes * 100).min(300);
+        let score = ctx.prior_strikes.saturating_mul(100).min(300);
         factors.push_back(RiskFactor {
             factor_type: RiskFactorType::PriorStrikes,
             score_weight: score,
@@ -340,7 +345,7 @@ pub fn evaluate_risk(env: &Env, ctx: &ActionContext) -> RiskAssessment {
 
     // 4. Batch size factor
     if ctx.is_batch && ctx.batch_size > 10 {
-        let score = ((ctx.batch_size - 10) * 10).min(200);
+        let score = (ctx.batch_size - 10).saturating_mul(10).min(200);
         factors.push_back(RiskFactor {
             factor_type: RiskFactorType::LargeBatchSize,
             score_weight: score,
@@ -426,6 +431,11 @@ pub fn evaluate_risk(env: &Env, ctx: &ActionContext) -> RiskAssessment {
 
 /// Evaluates risk, enforces verdicts, and updates actor historical velocity records.
 pub fn assess_and_record(env: &Env, ctx: &ActionContext) -> Result<RiskAssessment, Error> {
+    // Preview stays public; only the actor may mutate their velocity history.
+    ctx.actor.require_auth();
+    if ctx.amount < 0 || ctx.max_reference_amount < 0 {
+        return Err(Error::InvalidAmount);
+    }
     let assessment = evaluate_risk(env, ctx);
     let policy = get_risk_policy(env, ctx.action);
     let current_ledger = env.ledger().sequence();
@@ -465,7 +475,7 @@ pub fn assess_and_record(env: &Env, ctx: &ActionContext) -> Result<RiskAssessmen
 
             let ledgers_elapsed = current_ledger.saturating_sub(profile.last_action_ledger);
             if profile.last_action_ledger > 0 && ledgers_elapsed <= policy.velocity_window_ledgers {
-                profile.total_actions_in_window += 1;
+                profile.total_actions_in_window = profile.total_actions_in_window.saturating_add(1);
             } else {
                 profile.total_actions_in_window = 1;
             }
@@ -487,6 +497,57 @@ pub fn assess_and_record(env: &Env, ctx: &ActionContext) -> Result<RiskAssessmen
 /// Retrieves actor risk profile.
 pub fn get_actor_profile(env: &Env, actor: &Address) -> Option<ActorRiskProfile> {
     persistent_get(env, &DataKey::ActorProfile(actor.clone()))
+}
+
+/// Pool utilization saturates at 100%; compare safe rounded thresholds instead
+/// of multiplying an untrusted i128 amount by 10,000.
+fn amount_ratio_bps(amount: i128, reference: i128) -> u32 {
+    if amount <= 0 || reference <= 0 {
+        return 0;
+    }
+    if amount >= reference {
+        return 10_000;
+    }
+    let mut low = 0u32;
+    let mut high = 10_000u32;
+    while low < high {
+        let mid = (low + high + 1) / 2;
+        let threshold = (reference / 10_000) * i128::from(mid)
+            + ((reference % 10_000) * i128::from(mid) + 9_999) / 10_000;
+        if amount >= threshold {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    low
+}
+
+#[cfg(test)]
+mod arithmetic_tests {
+    use super::amount_ratio_bps;
+
+    #[test]
+    fn utilization_matches_exact_bounded_ratios() {
+        for reference in 1..=100i128 {
+            for amount in 0..=200i128 {
+                assert_eq!(
+                    amount_ratio_bps(amount, reference),
+                    ((amount * 10_000 / reference).min(10_000)) as u32
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn utilization_handles_full_width_amounts_and_invalid_references() {
+        assert_eq!(amount_ratio_bps(i128::MAX, 1), 10_000);
+        assert_eq!(amount_ratio_bps(i128::MAX, i128::MAX), 10_000);
+        assert_eq!(amount_ratio_bps(i128::MAX / 2, i128::MAX), 4_999);
+        assert_eq!(amount_ratio_bps(i128::MAX / 2 + 1, i128::MAX), 5_000);
+        assert_eq!(amount_ratio_bps(1, 0), 0);
+        assert_eq!(amount_ratio_bps(-1, 1), 0);
+    }
 }
 
 /// Resets actor risk profile under admin authorization (e.g. false positive remediation).

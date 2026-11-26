@@ -5,12 +5,19 @@ name: Release Readiness
 # the underlying commands pass, but nothing previously verified the checklist
 # itself was filled in. See docs/RELEASE_READINESS.md.
 on:
+  workflow_dispatch:
+    inputs:
+      evidence_manifest:
+        description: Signed release evidence manifest JSON for the selected commit
+        required: true
+        type: string
   pull_request:
     types: [opened, edited, reopened, synchronize]
     branches: [main, develop]
 
 jobs:
   checklist:
+    if: github.event_name == 'pull_request'
     name: PR checklist
     runs-on: ubuntu-latest
     steps:
@@ -27,3 +34,20 @@ jobs:
 
       - name: Verify release readiness gate (migrations, security, smoke tests, rollback rehearsals)
         run: node scripts/release-readiness-gate.cjs --check-all
+
+  release-evidence:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write signed evidence without interpreting input as shell code
+        env:
+          EVIDENCE_MANIFEST: ${{ inputs.evidence_manifest }}
+        run: printf '%s' "$EVIDENCE_MANIFEST" > "$RUNNER_TEMP/release-evidence.json"
+      - name: Require approved migration and recovery evidence for this commit
+        env:
+          RELEASE_EVIDENCE_PUBLIC_KEY: ${{ vars.RELEASE_EVIDENCE_PUBLIC_KEY }}
+          RELEASE_COMMIT_SHA: ${{ github.sha }}
+        run: node scripts/release-readiness-gate.cjs --manifest "$RUNNER_TEMP/release-evidence.json" --json

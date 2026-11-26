@@ -1,0 +1,56 @@
+name: Contributor safety
+
+on:
+  push:
+    branches: ['codex/**']
+    paths:
+      - 'shared/src/accessibility.rs'
+      - 'shared/src/risk_scoring.rs'
+      - 'shared/src/auth.rs'
+      - 'shared/src/errors.rs'
+      - 'shared/src/history.rs'
+      - 'shared/src/ownership_history.rs'
+      - 'shared/src/storage.rs'
+      - 'scripts/contributor-safety/**'
+      - 'scripts/contributor-diagnostics.cjs'
+      - 'scripts/test-contributor-diagnostics.cjs'
+      - 'scripts/release-evidence.cjs'
+      - 'scripts/test-release-evidence.cjs'
+      - 'scripts/release-readiness-gate.cjs'
+      - '.github/workflows/contributor-safety.yml'
+  pull_request:
+    paths:
+      - 'shared/src/accessibility.rs'
+      - 'shared/src/risk_scoring.rs'
+      - 'shared/src/auth.rs'
+      - 'shared/src/errors.rs'
+      - 'shared/src/history.rs'
+      - 'shared/src/ownership_history.rs'
+      - 'shared/src/storage.rs'
+      - 'scripts/contributor-safety/**'
+      - 'scripts/contributor-diagnostics.cjs'
+      - 'scripts/test-contributor-diagnostics.cjs'
+      - 'scripts/release-evidence.cjs'
+      - 'scripts/test-release-evidence.cjs'
+      - 'scripts/release-readiness-gate.cjs'
+      - '.github/workflows/contributor-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test production accessibility and risk modules
+        run: cargo +stable test --locked --manifest-path scripts/contributor-safety/Cargo.toml
+
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test diagnostics and signed release evidence
+        run: node --test scripts/test-contributor-diagnostics.cjs scripts/test-release-evidence.cjs

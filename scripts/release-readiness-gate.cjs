@@ -58,10 +58,18 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--check-all") opts.checkAll = true;
-    else if (arg === "--manifest" && argv[i + 1]) opts.manifest = argv[++i];
-    else if (arg === "--body-file" && argv[i + 1]) opts.bodyFile = argv[++i];
-    else if (arg === "--module" && argv[i + 1]) opts.module = argv[++i].toLowerCase();
+    else if (["--manifest", "--body-file", "--module"].includes(arg)) {
+      if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`Missing value for ${arg}`);
+      const value = argv[++i];
+      if (arg === "--manifest") opts.manifest = value;
+      if (arg === "--body-file") opts.bodyFile = value;
+      if (arg === "--module") {
+        opts.module = value.toLowerCase();
+        if (!CORE_MODULES.includes(opts.module)) throw new Error("Unknown module");
+      }
+    }
     else if (arg === "--json") opts.json = true;
+    else throw new Error(`Unknown option: ${arg}`);
   }
   return opts;
 }
@@ -289,40 +297,25 @@ function evaluateManifestFile(manifestPath) {
     return { passed: false, error: `Invalid manifest JSON: ${e.message}` };
   }
 
-  const modules = data.modules || [];
-  const checks = data.checks || [];
-  const exception = data.exception_marker || null;
-
-  if (modules.length === 0) {
-    return { passed: false, error: "Manifest declares no target modules" };
-  }
-
-  const issues = [];
-  for (const mod of modules) {
-    for (const gate of MANDATORY_GATES) {
-      const match = checks.find((c) => c.module === mod && c.kind === gate);
-      if (!match) {
-        if (!exception) {
-          issues.push(`Module "${mod}" is missing mandatory gate "${gate}"`);
-        }
-      } else if (match.status !== "Passed" && match.status !== "BypassedWithException") {
-        issues.push(`Module "${mod}" gate "${gate}" check status is ${match.status}`);
-      }
-    }
-  }
-
-  return {
-    passed: issues.length === 0,
-    issues,
-    exception,
-  };
+  return require("./release-evidence.cjs").evaluateEvidence({
+    manifest: data,
+    root: ROOT,
+    publicKey: process.env.RELEASE_EVIDENCE_PUBLIC_KEY,
+    expectedCommit: process.env.RELEASE_COMMIT_SHA,
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 function main() {
-  const opts = parseArgs(process.argv.slice(2));
+  let opts;
+  try {
+    opts = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error.message);
+    process.exit(2);
+  }
 
   if (!opts.checkAll && !opts.manifest && !opts.bodyFile && !opts.module) {
     // Default to check-all when invoked with no args
@@ -378,7 +371,7 @@ function main() {
     }
   }
 
-  if (results.exception && !results.ready && results.problems.length > 0) {
+  if (!opts.manifest && results.exception && !results.ready && results.problems.length > 0) {
     // If exception marker is present, acknowledge bypass
     results.ready = true;
   }
